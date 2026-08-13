@@ -1,20 +1,21 @@
 import "./globals.css";
 
 export const metadata = {
+  metadataBase: new URL("https://rigel-ten.vercel.app"),
   title: "Rigel — wallet diagnostics agent",
   description:
-    "Rigel reads any wallet, measures what is actually wrong with it, and writes the diagnosis in plain language. Every claim traced to a real tool call.",
+    "An agent that decides what to check on a Base wallet, goes and looks, and re-scores what it finds. Every number computed by a deterministic engine — the model never produces one.",
   openGraph: {
-    title: "Rigel — wallet diagnostics agent",
+    title: "Rigel — it decides what to check",
     description:
-      "Paste a wallet. Rigel plots it as a constellation, runs a deterministic risk engine, then decides what the first pass missed and goes looking.",
+      "Nine deterministic checks on any Base wallet. Then the agent picks what the first pass missed — other chains, open approvals — and investigates. On jesse.base.eth that took health from 85 to 67.",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Rigel — wallet diagnostics agent",
+    title: "Rigel — it decides what to check",
     description:
-      "Most portfolio tools show you what you hold. Rigel tells you what is wrong with it.",
+      "It found $1,293 reachable through 19 live approvals that no portfolio view would ever show. The score moved on evidence, not on opinion.",
     creator: "@BerlinBuildWeb3",
   },
 };
