@@ -958,6 +958,12 @@ async function analyze({ address, chain, chainLabel, key, trace, send }) {
   /* the agent decides what else is worth looking at; anything it turns up
      comes back as engine-computed findings, which can move the score */
   const ctx = { address, chain, chainLabel, key, trace, report, scans: [], approvals: null };
+
+  /* held so the report can show the score moving — the difference between this
+     and the final score is the only honest measure of what the agent added */
+  const baselineScore = report.score;
+  const baselineFindings = report.findings.length;
+
   const extra = report.score == null ? [] : await investigate(ctx);
 
   if (extra.length) {
@@ -1022,6 +1028,8 @@ async function analyze({ address, chain, chainLabel, key, trace, send }) {
       chainLabel,
       total: report.total,
       score: report.score,
+      baselineScore,
+      baselineFindings,
       grade: report.grade,
       findings: report.findings,
       metrics: report.metrics,

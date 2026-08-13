@@ -203,6 +203,95 @@ function Constellation({ holdings, address }) {
   );
 }
 
+/* ---------------------------------------------------------------- */
+/* the loop, running on the landing page                              */
+/* ---------------------------------------------------------------- */
+
+/* The agency was invisible until you committed to a 110-second run: the page
+   opened on a chart and the trace sat collapsed at the bottom. This replays
+   one real run — jesse.base.eth, health 85 down to 67 — on a loop, so what
+   the thing actually does is legible before anyone types an address.
+   Pure CSS on staged delays; no state, no hydration cost. */
+const LOOP_STAGES = [
+  { k: "engine", label: "engine", detail: "9 checks · Base · health 85" },
+  { k: "decide", label: "agent", detail: "this wallet holds enough to be worth draining" },
+  { k: "tool", label: "check_approvals()", detail: "19 live approvals · $1,293 reachable" },
+  { k: "rescore", label: "engine", detail: "re-scored on what came back · health 67" },
+];
+
+function AgentLoop() {
+  return (
+    <div className="loop" aria-label="How Rigel works: the engine scores, the agent chooses a tool, the engine re-scores what it finds">
+      <div className="loop-track">
+        {LOOP_STAGES.map((s, i) => (
+          <div className={`loop-stage loop-${s.k}`} key={s.k} style={{ "--i": i }}>
+            <span className="loop-dot" />
+            <div className="loop-body">
+              <span className="loop-label">{s.label}</span>
+              <span className="loop-detail">{s.detail}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="loop-foot">
+        <span className="loop-delta">
+          85 <span className="loop-arrow">→</span> <em>67</em>
+        </span>
+        <span className="loop-caption">
+          the score moved because the agent went looking, not because a model said so
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/* Decisions and tool calls are already in the trace; counting them here keeps
+   the report honest — the summary can only ever describe steps that ran. */
+function agentStats(steps = []) {
+  const decisions = steps.filter((s) => s.tool === "agent.decide").length;
+  const calls = steps
+    .filter((s) => s.tool === "agent.tool")
+    .map((s) => String(s.detail || "").split(" —")[0]);
+  return { decisions, calls };
+}
+
+function AgentSummary({ data }) {
+  const { decisions, calls } = agentStats(data.trace);
+  if (!decisions && !calls.length) return null;
+
+  const moved =
+    data.baselineScore != null && data.score != null && data.baselineScore !== data.score;
+
+  return (
+    <div className="agentsum">
+      <div className="agentsum-head">
+        <span className="agentsum-pip" />
+        the agent chose {calls.length} tool{calls.length === 1 ? "" : "s"} over{" "}
+        {decisions} decision{decisions === 1 ? "" : "s"}
+      </div>
+      <div className="agentsum-calls">
+        {calls.map((c, i) => (
+          <span className="agentsum-call" key={i} style={{ "--i": i }}>
+            {c}
+          </span>
+        ))}
+      </div>
+      {moved && (
+        <div className="agentsum-move">
+          health <span className="from">{data.baselineScore}</span>
+          <span className="loop-arrow">→</span>
+          <span className="to">{data.score}</span>
+          <span className="agentsum-why">
+            {data.score < data.baselineScore
+              ? "on evidence the first pass never saw"
+              : "the first pass was reading one chain and got it wrong"}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TraceRows({ steps, pending }) {
   return (
     <div className="trace">
@@ -463,23 +552,27 @@ export default function Page() {
           <span className="brand-note">wallet diagnostics</span>
         </div>
         <div className="masthead-right">
-          deterministic engine · narrated, not scored, by a model
+          autonomous · picks its own tools · never invents a number
         </div>
       </header>
 
       <section className="hero">
         <h1>
-          Your wallet is a chart.
+          It decides what to check.
           <br />
-          <em>Most people never look at it.</em>
+          <em>Then it goes and looks.</em>
         </h1>
         <p>
-          Rigel reads any EVM wallet, plots what it actually holds, measures the
-          risks that come from the shape of the portfolio rather than the price of
-          any one token, and writes the diagnosis in plain language. Every number
-          comes from a real API call, listed at the bottom of the page.
+          Rigel runs nine deterministic checks on any Base wallet. Then an agent
+          reads that output and picks what the first pass missed — other chains,
+          open approvals — and investigates. Everything it brings back is
+          re-scored by the same engine, so the health score moves on evidence.
+          The model chooses where to look and writes the diagnosis. It never
+          produces a number.
         </p>
       </section>
+
+      <AgentLoop />
 
       <div className="console">
         <label className="field">
@@ -571,6 +664,12 @@ export default function Page() {
 
       {data && (
         <>
+          <div className="sec">
+            <h2>What the agent did</h2>
+            <span className="line" />
+          </div>
+          <AgentSummary data={data} />
+
           <div className="sec">
             <h2>The chart</h2>
             <span className="line" />

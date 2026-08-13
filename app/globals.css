@@ -946,6 +946,289 @@ select:focus-visible,
   }
 }
 
+/* ---------- the loop, running on the landing page ---------- */
+
+.loop {
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: linear-gradient(180deg, var(--plate) 0%, var(--ink) 100%);
+  padding: 26px 26px 20px;
+  margin: 8px 0 30px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* the sweep that ties the four stages together as one pass */
+.loop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 42%,
+    rgba(232, 163, 61, 0.07) 50%,
+    transparent 58%
+  );
+  animation: loopSweep 9s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes loopSweep {
+  from {
+    transform: translateX(-60%);
+  }
+  to {
+    transform: translateX(60%);
+  }
+}
+
+.loop-track {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0;
+  position: relative;
+}
+
+.loop-stage {
+  position: relative;
+  padding: 0 18px 0 0;
+  opacity: 0.3;
+  animation: loopLight 9s ease-in-out infinite;
+  animation-delay: calc(var(--i) * 2.25s);
+}
+
+/* connector between stages, drawn only between them */
+.loop-stage:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  right: 8px;
+  top: 4px;
+  height: 1px;
+  background: var(--rule);
+}
+
+@keyframes loopLight {
+  0%,
+  4% {
+    opacity: 0.3;
+  }
+  10%,
+  22% {
+    opacity: 1;
+  }
+  32%,
+  100% {
+    opacity: 0.42;
+  }
+}
+
+.loop-dot {
+  display: block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--rule);
+  margin-bottom: 14px;
+  position: relative;
+  z-index: 1;
+}
+
+.loop-decide .loop-dot,
+.loop-tool .loop-dot {
+  background: var(--amber);
+}
+.loop-engine .loop-dot,
+.loop-rescore .loop-dot {
+  background: var(--cyan);
+}
+
+/* only the agent's own steps pulse — the engine is not thinking */
+.loop-decide .loop-dot::after,
+.loop-tool .loop-dot::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border-radius: 50%;
+  border: 1px solid var(--amber);
+  opacity: 0;
+  animation: loopPing 9s ease-out infinite;
+  animation-delay: calc(var(--i) * 2.25s);
+}
+
+@keyframes loopPing {
+  0%,
+  6% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.9;
+  }
+  26% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.loop-label {
+  display: block;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  color: var(--star);
+  margin-bottom: 6px;
+}
+
+.loop-decide .loop-label,
+.loop-tool .loop-label {
+  color: var(--amber);
+}
+
+.loop-detail {
+  display: block;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--paper-dim);
+  max-width: 21ch;
+}
+
+.loop-foot {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--rule);
+}
+
+.loop-delta {
+  font-family: var(--mono);
+  font-size: 15px;
+  color: var(--paper-dim);
+}
+
+.loop-delta em {
+  font-style: normal;
+  color: var(--crimson);
+}
+
+.loop-arrow {
+  color: var(--rule);
+  margin: 0 6px;
+}
+
+.loop-caption {
+  font-size: 12.5px;
+  color: var(--paper-dim);
+}
+
+/* ---------- what the agent did ---------- */
+
+.agentsum {
+  border: 1px solid var(--rule);
+  border-left: 2px solid var(--amber);
+  border-radius: 3px;
+  background: var(--plate);
+  padding: 20px 22px;
+  margin-bottom: 30px;
+}
+
+.agentsum-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+  color: var(--star);
+}
+
+.agentsum-pip {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--amber);
+  flex: none;
+}
+
+.agentsum-calls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0 0;
+}
+
+.agentsum-call {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--amber);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  padding: 5px 9px;
+  background: var(--ink);
+  opacity: 0;
+  animation: callIn 0.4s ease-out forwards;
+  animation-delay: calc(var(--i) * 0.11s);
+}
+
+@keyframes callIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.agentsum-move {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--rule);
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--paper-dim);
+}
+
+.agentsum-move .from {
+  color: var(--paper-dim);
+  text-decoration: line-through;
+}
+
+.agentsum-move .to {
+  color: var(--star);
+  font-size: 17px;
+}
+
+.agentsum-why {
+  font-family: var(--body);
+  font-size: 12.5px;
+  color: var(--paper-dim);
+}
+
+@media (max-width: 760px) {
+  .loop-track {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+  .loop-stage:not(:last-child)::before {
+    display: none;
+  }
+  .loop-detail {
+    max-width: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .twinkle,
   .scanning::after,
@@ -953,8 +1236,17 @@ select:focus-visible,
   .star-in,
   .star-label,
   .skeleton,
-  .trace-in {
+  .trace-in,
+  .loop::after,
+  .loop-stage,
+  .loop-dot::after,
+  .agentsum-call {
     animation: none;
+  }
+
+  .loop-stage,
+  .agentsum-call {
+    opacity: 1;
   }
 
   .constellation-line {
