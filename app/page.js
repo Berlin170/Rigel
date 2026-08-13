@@ -872,7 +872,7 @@ export default function Page() {
       <footer className="foot">
         <span>Rigel · not financial advice, always DYOR</span>
         <span className="foot-links">
-          <a href="https://github.com/Berlin170" target="_blank" rel="noreferrer">
+          <a href="https://github.com/Berlin170/Rigel" target="_blank" rel="noreferrer">
             GitHub
           </a>
           <a href="https://x.com/BerlinBuildWeb3" target="_blank" rel="noreferrer">
