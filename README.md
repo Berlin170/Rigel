@@ -1,5 +1,7 @@
 # Rigel — wallet diagnostics agent
 
+**Live: [rigel-ten.vercel.app](https://rigel-ten.vercel.app)** — paste an address, or press one of the two sample wallets.
+
 Most portfolio tools show you what you hold. Rigel tells you what is wrong with it.
 
 Paste any EVM address. A deterministic engine reads the wallet and measures what is structurally wrong with the portfolio. Then an agent decides what the baseline scan missed — other chains, open approvals — and goes and looks. Everything it finds comes back through the same engine, so the score moves on evidence, not on opinion.
@@ -45,27 +47,22 @@ The trace at the bottom of every report shows each decision as it happens, strea
 
 ---
 
+## The two sample wallets
+
+Each button on the landing page exercises a different tool, because each wallet fails in a different way.
+
+| Wallet | What the baseline pass sees | What the agent goes and finds |
+|---|---|---|
+| `vitalik.eth` | 69% of Base value in one position — reads as fragile | `scan_chain` finds the wallet's real size on Ethereum, so the concentration was an artifact of looking at one chain |
+| `jesse.base.eth` | 374 priced positions, health 85 | `check_approvals` finds $1,293 reachable through 19 live approvals, many unlimited — health falls to 67 |
+
+The second run is the one worth watching. Nothing about the portfolio's shape changed; the agent decided the wallet held enough to be worth draining, went to look, and the engine re-scored what it brought back.
+
 ## Setup
 
-1. Create a GitHub repo and upload every file, keeping the paths exactly:
-
-```
-package.json
-.env.example
-app/layout.js
-app/page.js
-app/globals.css
-app/icon.svg
-app/lib/agent.js
-app/api/analyze/route.js
-app/api/chat/route.js
-```
-
-Next.js resolves routes from the directory tree — flattening these breaks the build.
-
-2. Import the repo at [vercel.com/new](https://vercel.com/new).
-3. Add the environment variables below under **Settings → Environment Variables**.
-4. **Redeploy.** Vercel does not apply new variables to an existing build.
+1. Clone the repo and import it at [vercel.com/new](https://vercel.com/new).
+2. Add the environment variables below under **Settings → Environment Variables**.
+3. **Redeploy.** Vercel does not apply new variables to an existing build.
 
 ### Environment variables
 
@@ -130,7 +127,7 @@ Stop the dev server before `npm run build` — both write to `.next`, and buildi
 
 ## Submission copy
 
-> Rigel is an autonomous wallet diagnostics agent for EVM chains. A deterministic engine reads any address and measures what is structurally wrong with the portfolio — concentration, dry powder, long-tail weight, unpriced and spam positions, drawdown, dormancy. Then the agent decides what the first pass missed and goes looking: scanning other chains when a concentration reading looks like a single-chain artifact, pulling token approvals when the wallet holds enough to be worth draining. Everything it finds is scored by the same engine, so the health score moves on evidence. On one run it took a wallet from 46 to 28 after finding $3,143 reachable through 17 live approvals that no portfolio view would ever show. The full sequence of decisions streams live in the trace. The model chooses where to look and writes the diagnosis; it never produces a number. Most portfolio tools show you what you hold. Rigel tells you what is wrong with it.
+> Rigel is an autonomous wallet diagnostics agent, built Base-first. A deterministic engine reads any address and measures what is structurally wrong with the portfolio — concentration, dry powder, long-tail weight, unpriced and spam positions, drawdown, dormancy. Then the agent decides what the first pass missed and goes looking: scanning other chains when a concentration reading looks like a single-chain artifact, pulling token approvals when the wallet holds enough to be worth draining. Everything it finds is scored by the same engine, so the health score moves on evidence. Run it on jesse.base.eth and the baseline says 85/100; the agent chooses to check approvals, finds $1,293 reachable through 19 live approvals, and the score falls to 67 — a risk no portfolio view would ever show. The full sequence of decisions streams live in the trace. The model chooses where to look and writes the diagnosis; it never produces a number. Most portfolio tools show you what you hold. Rigel tells you what is wrong with it.
 
 ---
 
