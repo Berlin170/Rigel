@@ -3,8 +3,8 @@
 import { useState } from "react";
 
 const CHAINS = [
-  ["eth-mainnet", "Ethereum"],
   ["base-mainnet", "Base"],
+  ["eth-mainnet", "Ethereum"],
   ["arbitrum-mainnet", "Arbitrum"],
   ["optimism-mainnet", "Optimism"],
   ["matic-mainnet", "Polygon"],
@@ -373,7 +373,7 @@ function Chat({ report }) {
 
 export default function Page() {
   const [address, setAddress] = useState("");
-  const [chain, setChain] = useState("eth-mainnet");
+  const [chain, setChain] = useState("base-mainnet");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [data, setData] = useState(null);
@@ -504,17 +504,31 @@ export default function Page() {
         </button>
       </div>
 
+      {/* Two wallets that fail in different ways, so each button exercises a
+          different tool: the first reads as concentrated until the agent looks
+          at another chain, the second holds enough behind live approvals to be
+          worth draining. */}
       <div className="samples">
         <span>try</span>
         <button
           onClick={() => {
             const a = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
             setAddress(a);
-            setChain("eth-mainnet");
+            setChain("base-mainnet");
             run(a);
           }}
         >
           vitalik.eth
+        </button>
+        <button
+          onClick={() => {
+            const a = "0x849151d7D0bF1F34b70d5caD5149D28CC2308bf1";
+            setAddress(a);
+            setChain("base-mainnet");
+            run(a);
+          }}
+        >
+          jesse.base.eth
         </button>
       </div>
 

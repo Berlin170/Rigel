@@ -843,7 +843,7 @@ export async function POST(req) {
   }
 
   const address = String(body.address || "").trim();
-  const chain = CHAINS[body.chain] ? body.chain : "eth-mainnet";
+  const chain = CHAINS[body.chain] ? body.chain : "base-mainnet";
   const chainLabel = CHAINS[chain];
 
   if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
