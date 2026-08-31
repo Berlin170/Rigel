@@ -388,10 +388,19 @@ const AGENT_MAX_STEPS = 4;
    jesse.base.eth run on 2026-08-31 spent 112s deciding across three steps, with
    one single call taking 68s. The ceiling therefore has to be wall-clock, not
    step count: past this point the loop concludes on the evidence already in
-   hand rather than opening a decision it may not be able to finish. Measured
-   from the start of the request, so the baseline reads count against it too.
-   The remainder of maxDuration is left for the written brief (~9s) and slack. */
+   hand rather than opening a decision it may not be able to finish.
+
+   Measured from the start of the investigation, not the start of the request.
+   Counting the baseline reads against it meant the provider's latency decided
+   how much the agent got to think: on production those reads took 65s of a
+   150s budget, one decide took 56s, and the loop stopped with 19s left having
+   never opened a second step. The overall wall cap below is what protects
+   maxDuration; this number is the investigation's own allowance. */
 const AGENT_BUDGET_MS = 150_000;
+
+/* Whatever the investigation is allowed, the response still has to land inside
+   maxDuration (300s) with room for the written brief (~9s) and slack. */
+const REQUEST_CAP_MS = 240_000;
 
 /* Below this there is not enough left for a decision plus the lookups it would
    ask for, so starting one only risks the response. */
@@ -626,17 +635,19 @@ async function investigate(ctx) {
   }
 
   const system = [
-    "You are Rigel's investigator. A deterministic engine has already scanned one chain and produced the findings below.",
-    "Your only job is to decide which follow-up tools to call. You never compute or state a number yourself.",
-    "Call scan_chain when the concentration reading might be an artifact of looking at one chain, or when the wallet looks thin here.",
-    "Call check_approvals when the wallet holds real value, because open approvals are a risk the portfolio shape cannot show.",
-    "Call inspect_token on a position that carries a large share of the wallet, naming it by its symbol. The engine can see how big a position is but not whether it can be sold — that depends on how the token's supply is distributed.",
+    "You are Rigel's investigator. A deterministic engine has already scanned one chain and produced the findings below. It computes every number; you never compute or state one.",
+    "Decide what to look at next, and judge each lookup by one test: would the answer change the diagnosis this wallet's owner is about to act on? If it would not, do not spend the call.",
+    "Three things the engine could not see — limits of where it looked, not of how it works:",
+    "- It read one chain. How a wallet is shaped on one chain is not how it is shaped.",
+    "- It measured the portfolio, which is what the owner holds. It did not measure what someone else is still permitted to move.",
+    "- It sized every position but cannot tell whether one can be sold. How big a position is and whether it can be exited are different risks.",
+    "Your tools speak to those blind spots. Which of them matter here — and whether any of them do — is a judgement about this wallet, not a rule to apply.",
     ...(report.gradable
       ? []
       : [
-          "This wallet is below the value floor, so the engine refused to score it. The only question worth answering is whether the address is unused or simply active somewhere else. Call scan_chain on the chains most likely to hold the balance, and do not call check_approvals — there is nothing here to take.",
+          "This wallet is below the value floor, so the engine refused to score it. The only question worth answering is whether the address is unused or simply active somewhere else. Nothing here is worth taking, so exposure is not the question.",
         ]),
-    "You may call several tools at once. Stop calling tools when further lookups would not change the diagnosis.",
+    "You may call several tools at once, and you may call none. Stop when further lookups would not change the diagnosis.",
     "When you are done, reply with one short plain sentence naming what you checked and why. No numbers, no markdown, no headings or bullets — the engine writes the report, not you.",
   ].join("\n");
 
@@ -901,7 +912,14 @@ async function analyze({ address, chain, chainLabel, key, trace, send }) {
     trace.run(
       "chain.activity",
       `${chainLabel} · most recent transaction for the dormancy check`,
-      () => goldrush(`/${chain}/address/${address}/transactions_v3/?page-size=1`, key)
+      /* no-logs is the whole cost of this call: the dormancy check reads one
+         timestamp off the first item and never touches decoded events, and
+         asking for them took the request from 3.6s to 76s against Base. */
+      () =>
+        goldrush(
+          `/${chain}/address/${address}/transactions_v3/?page-size=1&no-logs=true`,
+          key
+        )
     ),
   ]);
 
@@ -988,7 +1006,9 @@ async function analyze({ address, chain, chainLabel, key, trace, send }) {
       value: p.value,
       share: report.total ? p.value / report.total : 0,
     })),
-    deadline: startedAt + AGENT_BUDGET_MS,
+    /* the investigation's own allowance, still floored by the request cap so a
+       slow set of baseline reads cannot push the response past maxDuration */
+    deadline: Math.min(Date.now() + AGENT_BUDGET_MS, startedAt + REQUEST_CAP_MS),
   };
 
   /* held so the report can show the score moving — the difference between this

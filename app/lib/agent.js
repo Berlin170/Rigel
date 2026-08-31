@@ -454,7 +454,7 @@ export const AGENT_TOOLS = [
     function: {
       name: "inspect_token",
       description:
-        "Look up how one token this wallet holds is distributed: how many addresses hold it, and how much of the supply the largest holders control. Call this when a single position carries a large share of the wallet, or when a material holding is a name that would not be widely held. Concentration is only half the question — a position is a different risk when the token is held by millions of addresses than when ten addresses control most of the supply and it cannot be exited at size.",
+        "Look up how one token is distributed: how many addresses hold it, and how much of the supply the largest holders control. Concentration is only half the question — a position is a different risk when the token is held by millions of addresses than when ten addresses control most of the supply and cannot be exited at size. Only the holdings on the chain being diagnosed can be inspected; a token seen through scan_chain on another chain is not reachable here.",
       parameters: {
         type: "object",
         properties: {
