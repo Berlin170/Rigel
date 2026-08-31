@@ -50,6 +50,13 @@ const usd = (n) =>
 
 const pct = (n) => (n * 100).toFixed(1) + "%";
 
+/* Below this, every ratio a diagnosis rests on is arithmetically true and
+   practically meaningless: a third of a cent of ETH reads as "100% concentrated"
+   with "no dry powder", and 100 - 39 is a confident-looking 61. Wallets under
+   the floor still get investigated — looking almost empty on one chain is the
+   best reason there is to go look at another — they just don't get a number. */
+const DUST_FLOOR_USD = 10;
+
 /* The trace is streamed to the client as each step lands, so the user watches
    the agent work instead of waiting on a spinner. `emit` is the wire. */
 function makeTrace(emit) {
@@ -184,6 +191,48 @@ function diagnose({ priced, unpriced, spam }, series, lastTxISO, chainLabel) {
         },
       ],
       metrics: { total: 0, positions: 0 },
+      gradable: false,
+      investigable: false,
+    };
+  }
+
+  /* Above zero but under the floor. Report what is here, refuse to grade it,
+     and let the investigation layer go looking on other chains. */
+  if (total < DUST_FLOOR_USD) {
+    const top = priced[0];
+    return {
+      total,
+      score: null,
+      gradable: false,
+      investigable: true,
+      grade: "Too little to grade",
+      findings: [
+        {
+          id: "below-floor",
+          severity: "note",
+          title: "Not enough value here to score",
+          detail: `This wallet holds ${usd(total)} across ${priced.length} priced position${
+            priced.length === 1 ? "" : "s"
+          } on ${chainLabel}. Concentration, stable buffer, drawdown — every ratio a health score is built from is technically correct at this size and tells you nothing, so there is no score above. What is worth knowing is whether the wallet is empty or just somewhere else, and that is what Rigel checks next.`,
+          evidence: `${usd(total)} · ${priced.length} priced · ${unpriced.length} unpriced · ${spam.length} spam-filtered`,
+          penalty: 0,
+        },
+      ],
+      /* the shape ratios are deliberately null: the UI renders them as "—"
+         rather than printing a meaningless 100.0% next to $0.00 */
+      metrics: {
+        total,
+        positions: priced.length,
+        topSymbol: top.symbol,
+        topShare: null,
+        hhi: null,
+        stableShare: null,
+        longtailShare: null,
+        unpriced: unpriced.length,
+        spam: spam.length,
+        drawdown: null,
+        change: null,
+      },
     };
   }
 
@@ -390,6 +439,8 @@ function diagnose({ priced, unpriced, spam }, series, lastTxISO, chainLabel) {
     score,
     grade,
     findings,
+    gradable: true,
+    investigable: true,
     metrics: {
       total,
       positions: priced.length,
@@ -569,6 +620,50 @@ const TOOL_IMPL = { scan_chain: runScanChain, check_approvals: runCheckApprovals
    arithmetic — these are computed here, from tool output. */
 function crossChainFindings(report, scans) {
   const found = scans.filter((s) => s.totalUsd > 0);
+
+  const where = found
+    .slice()
+    .sort((a, b) => b.totalUsd - a.totalUsd)
+    .map((s) => `${s.chain} ${usd(s.totalUsd)}`)
+    .join(" · ");
+
+  /* An ungradable wallet has no concentration penalty to refund and no share
+     to restate, so it gets its own reading: where the money actually is, or
+     that the sweep came back empty too. */
+  if (!report.gradable) {
+    if (!scans.length) return [];
+    const checked = scans.map((s) => s.chain).join(", ");
+    if (!found.length) {
+      return [
+        {
+          id: "cross-chain",
+          severity: "note",
+          title: "Empty on every chain checked",
+          detail: `${report.chainLabel} holds ${usd(
+            report.total
+          )} and there is nothing on ${checked} either. This wallet is not underweight or badly shaped — it is unused, and there is nothing here to diagnose.`,
+          evidence: `${scans.length + 1} chains checked · no priced value found`,
+          penalty: 0,
+        },
+      ];
+    }
+    const elsewhere = found.reduce((s, x) => s + x.totalUsd, 0);
+    return [
+      {
+        id: "cross-chain",
+        severity: "ok",
+        title: "The wallet is real, the value is on another chain",
+        detail: `${report.chainLabel} holds ${usd(
+          report.total
+        )}, which is why there is no score above. Elsewhere the same address holds ${usd(
+          elsewhere
+        )}. Run the diagnosis again against the chain holding the balance and it has something to actually measure.`,
+        evidence: where,
+        penalty: 0,
+      },
+    ];
+  }
+
   if (!found.length) return [];
 
   const elsewhere = found.reduce((s, x) => s + x.totalUsd, 0);
@@ -585,11 +680,6 @@ function crossChainFindings(report, scans) {
   let refund = 0;
   if (trueTop < 0.4) refund = priorPenalty;
   else if (trueTop < 0.6 && priorPenalty >= 30) refund = 16;
-
-  const where = found
-    .sort((a, b) => b.totalUsd - a.totalUsd)
-    .map((s) => `${s.chain} ${usd(s.totalUsd)}`)
-    .join(" · ");
 
   return [
     {
@@ -687,6 +777,11 @@ async function investigate(ctx) {
     "Your only job is to decide which follow-up tools to call. You never compute or state a number yourself.",
     "Call scan_chain when the concentration reading might be an artifact of looking at one chain, or when the wallet looks thin here.",
     "Call check_approvals when the wallet holds real value, because open approvals are a risk the portfolio shape cannot show.",
+    ...(report.gradable
+      ? []
+      : [
+          "This wallet is below the value floor, so the engine refused to score it. The only question worth answering is whether the address is unused or simply active somewhere else. Call scan_chain on the chains most likely to hold the balance, and do not call check_approvals — there is nothing here to take.",
+        ]),
     "You may call several tools at once. Stop calling tools when further lookups would not change the diagnosis.",
     "When you are done, reply with one short sentence naming what you checked and why. No numbers.",
   ].join("\n");
@@ -790,6 +885,7 @@ async function writeBrief(facts) {
     "- Three short paragraphs maximum, plain sentences, no headings, no bullet points, no markdown.",
     "- No hype, no reassurance the facts do not support, no filler openers.",
     "- If the picture is genuinely fine, say so briefly instead of manufacturing concern.",
+    "- If healthScore is null the engine deliberately refused to grade this wallet. Say why in plain terms and stop. Do not invent a verdict, a grade, or a substitute score, and do not read meaning into percentages of a near-zero balance.",
   ].join("\n");
 
   const res = await fetch(`${base.replace(/\/$/, "")}/v1/messages`, {
@@ -964,20 +1060,39 @@ async function analyze({ address, chain, chainLabel, key, trace, send }) {
   const baselineScore = report.score;
   const baselineFindings = report.findings.length;
 
-  const extra = report.score == null ? [] : await investigate(ctx);
+  const extra = report.investigable ? await investigate(ctx) : [];
+
+  /* For a wallet under the floor, "look somewhere else" is not a judgement
+     call, so the engine sweeps even when the agent didn't choose to — and when
+     there is no investigation endpoint configured at all. */
+  if (!report.gradable && ctx.scans.length === 0) {
+    for (const name of ["ethereum", "arbitrum", "optimism"]) {
+      if (SCAN_CHAINS[name] === chain) continue;
+      await trace.run("engine.sweep", `${name} — too little here to grade`, () =>
+        runScanChain({ chain: name }, ctx)
+      );
+    }
+    extra.push(...crossChainFindings(report, ctx.scans));
+  }
 
   if (extra.length) {
     report.findings.push(...extra);
-    const penalty = report.findings.reduce((s, f) => s + (f.penalty || 0), 0);
-    report.score = Math.max(0, Math.min(100, Math.round(100 - penalty)));
-    report.grade =
-      report.score >= 80
-        ? "Healthy"
-        : report.score >= 60
-        ? "Workable"
-        : report.score >= 40
-        ? "Fragile"
-        : "High risk";
+
+    /* An ungradable wallet stays ungradable. Value found by a scan is a total,
+       not a classified portfolio — scoring it would mean grading concentration
+       and stable buffer we never computed. */
+    if (report.gradable) {
+      const penalty = report.findings.reduce((s, f) => s + (f.penalty || 0), 0);
+      report.score = Math.max(0, Math.min(100, Math.round(100 - penalty)));
+      report.grade =
+        report.score >= 80
+          ? "Healthy"
+          : report.score >= 60
+          ? "Workable"
+          : report.score >= 40
+          ? "Fragile"
+          : "High risk";
+    }
 
     const order = { critical: 0, warn: 1, ok: 2, note: 3 };
     report.findings.sort((a, b) => order[a.severity] - order[b.severity]);

@@ -689,7 +689,9 @@ export default function Page() {
               <div className="score-num" style={{ color: scoreColor }}>
                 {data.score ?? "—"}
               </div>
-              <div className="score-den">health score</div>
+              <div className="score-den">
+                {data.score == null ? "not scored" : "health score"}
+              </div>
               <div className="grade" style={{ color: scoreColor }}>
                 {data.grade}
               </div>
