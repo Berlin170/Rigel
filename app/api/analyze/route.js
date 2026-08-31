@@ -97,7 +97,19 @@ async function goldrush(path, key) {
     headers: { Authorization: `Bearer ${key}` },
     cache: "no-store",
   });
-  if (!res.ok) throw new Error(`GoldRush ${res.status}`);
+  if (!res.ok) {
+    /* The status matters to whoever is reading the trace: a 429 under load and
+       a 401 from a missing key are the same blank screen otherwise. */
+    const why =
+      res.status === 429
+        ? "rate limited"
+        : res.status === 401 || res.status === 403
+        ? "key rejected"
+        : res.status >= 500
+        ? "provider error"
+        : `HTTP ${res.status}`;
+    throw new Error(`GoldRush ${res.status} — ${why}`);
+  }
   const json = await res.json();
   if (json.error) throw new Error(json.error_message || "GoldRush error");
   return json.data;
