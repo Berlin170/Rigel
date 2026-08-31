@@ -477,6 +477,23 @@ function diagnose({ priced, unpriced, spam }, series, lastTxISO, chainLabel) {
 
 const AGENT_MAX_STEPS = 4;
 
+/* Steps alone do not bound the run. Each decision is a model call capped at 90s,
+   so four of them can spend 360s against a maxDuration of 300 — and a measured
+   jesse.base.eth run on 2026-08-31 spent 112s deciding across three steps, with
+   one single call taking 68s. The ceiling therefore has to be wall-clock, not
+   step count: past this point the loop concludes on the evidence already in
+   hand rather than opening a decision it may not be able to finish. Measured
+   from the start of the request, so the baseline reads count against it too.
+   The remainder of maxDuration is left for the written brief (~9s) and slack. */
+const AGENT_BUDGET_MS = 150_000;
+
+/* Below this there is not enough left for a decision plus the lookups it would
+   ask for, so starting one only risks the response. */
+const AGENT_MIN_STEP_MS = 20_000;
+
+/* Per-call cap, still applied under the budget above. */
+const AGENT_STEP_TIMEOUT_MS = 90_000;
+
 const SCAN_CHAINS = {
   ethereum: "eth-mainnet",
   base: "base-mainnet",
@@ -824,10 +841,21 @@ async function investigate(ctx) {
   ];
 
   for (let step = 0; step < AGENT_MAX_STEPS; step++) {
+    const left = ctx.deadline - Date.now();
+    if (left < AGENT_MIN_STEP_MS) {
+      trace.note(
+        "agent.stop",
+        "investigation budget spent — concluding on the evidence already gathered"
+      );
+      break;
+    }
+
     const decision = await trace.run(
       "agent.decide",
       `choosing what to investigate — step ${step + 1}`,
-      () => agentChat(messages, AGENT_TOOLS)
+      () => agentChat(messages, AGENT_TOOLS, {
+        timeoutMs: Math.min(AGENT_STEP_TIMEOUT_MS, left),
+      })
     );
     const msg = decision?.message;
     if (!msg) break;
@@ -1011,6 +1039,7 @@ export async function POST(req) {
 }
 
 async function analyze({ address, chain, chainLabel, key, trace, send }) {
+  const startedAt = Date.now();
   trace.note("resolve", `${address} on ${chainLabel}`);
 
   /* These three reads are independent — nothing consumes one to build another,
@@ -1065,7 +1094,17 @@ async function analyze({ address, chain, chainLabel, key, trace, send }) {
 
   /* the agent decides what else is worth looking at; anything it turns up
      comes back as engine-computed findings, which can move the score */
-  const ctx = { address, chain, chainLabel, key, trace, report, scans: [], approvals: null };
+  const ctx = {
+    address,
+    chain,
+    chainLabel,
+    key,
+    trace,
+    report,
+    scans: [],
+    approvals: null,
+    deadline: startedAt + AGENT_BUDGET_MS,
+  };
 
   /* held so the report can show the score moving — the difference between this
      and the final score is the only honest measure of what the agent added */
