@@ -647,7 +647,7 @@ async function investigate(ctx) {
       : [
           "This wallet is below the value floor, so the engine refused to score it. The only question worth answering is whether the address is unused or simply active somewhere else. Nothing here is worth taking, so exposure is not the question.",
         ]),
-    "You may call several tools at once, and you may call none. Stop when further lookups would not change the diagnosis.",
+    "You may call several tools at once. Stop when further lookups would not change the diagnosis — but stop by saying so, not by describing a check you did not run. Nothing is checked unless you call the tool.",
     "When you are done, reply with one short plain sentence naming what you checked and why. No numbers, no markdown, no headings or bullets — the engine writes the report, not you.",
   ].join("\n");
 
@@ -683,6 +683,10 @@ async function investigate(ctx) {
     },
   ];
 
+  /* Whether anything was actually looked up, as opposed to described. */
+  let toolsRun = 0;
+  let nudged = false;
+
   for (let step = 0; step < AGENT_MAX_STEPS; step++) {
     const left = ctx.deadline - Date.now();
     if (left < AGENT_MIN_STEP_MS) {
@@ -715,13 +719,41 @@ async function investigate(ctx) {
 
     if (!calls.length) {
       const closing = stripThink(msg.content);
-      /* cut on a word boundary — a trace line ending mid-word ("…is now
-         clear. Her") reads as a truncation bug rather than a summary */
-      if (closing) trace.note("agent.conclude", clip(oneLine(closing), 160));
+
+      /* Observed in production: the model answered "I checked token approvals
+         because…" having called nothing at all. Narrating an action instead of
+         taking it is a normal tool-calling failure, but the loop treated the
+         prose as a conclusion and wrote the claim into the trace — a lie, in
+         the one place this app promises not to invent anything. Ask once. */
+      if (!toolsRun && !nudged) {
+        nudged = true;
+        trace.note("agent.retry", "answered without calling anything — asked to look or say why not");
+        messages.push({
+          role: "user",
+          content:
+            "You called no tool, so nothing has been checked and nothing was added to the report. Either call the tools you need now, or reply explaining why no lookup would change the diagnosis. Do not describe checks you have not run.",
+        });
+        continue;
+      }
+
+      /* A summary is only allowed to stand when there is something to
+         summarise; otherwise record what actually happened, in our words. */
+      if (toolsRun) {
+        /* cut on a word boundary — a trace line ending mid-word ("…is now
+           clear. Her") reads as a truncation bug rather than a summary */
+        if (closing) trace.note("agent.conclude", clip(oneLine(closing), 160));
+      } else {
+        trace.note(
+          "agent.skip",
+          "the agent called no tools — the baseline scan stands on its own"
+        );
+      }
       break;
     }
 
     /* the agent's chosen lookups run concurrently */
+    toolsRun += calls.length;
+
     await Promise.all(
       calls.map(async (call) => {
         const name = call.function?.name;

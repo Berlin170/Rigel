@@ -57,7 +57,7 @@ export const pct = (n) => (n * 100).toFixed(1) + "%";
    momentary no. Measured on a four-call step: three came back 403 and the
    identical calls succeeded ~2s later. Retrying transient statuses here is the
    difference between a trace full of red and one that reads as a clean run. */
-export async function goldrush(path, key, { tries = 3 } = {}) {
+export async function goldrush(path, key, { tries = 4 } = {}) {
   for (let attempt = 0; ; attempt++) {
     const res = await fetch(`${GOLDRUSH}${path}`, {
       headers: { Authorization: `Bearer ${key}` },
@@ -70,9 +70,12 @@ export async function goldrush(path, key, { tries = 3 } = {}) {
       return json.data;
     }
 
+    /* 0.7s, 1.4s, 2.8s. Three tries at half this was still exhausting the
+       limiter when four lookups went out at once; the steps have a 90s cap, so
+       waiting longer costs less than losing the lookup. */
     const transient = res.status === 429 || res.status === 403 || res.status >= 500;
     if (transient && attempt < tries - 1) {
-      await new Promise((r) => setTimeout(r, 500 * 2 ** attempt + Math.random() * 300));
+      await new Promise((r) => setTimeout(r, 700 * 2 ** attempt + Math.random() * 400));
       continue;
     }
 
