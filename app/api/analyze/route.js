@@ -1,54 +1,26 @@
-import { agentChat, claudeConfigured } from "../../lib/agent";
+/* Every chain read, the classifier, and the tools the model may reach for live
+   in lib/agent.js so the report route and the chat route share one definition.
+   They used to be copied into this file, and the copies drifted: scan_chain
+   here had the Alchemy failover and the chat route's did not. */
+import {
+  AGENT_TOOLS,
+  CHAINS,
+  SCAN_CHAINS,
+  TOOL_IMPL,
+  agentChat,
+  claudeConfigured,
+  classify,
+  fetchBalances,
+  goldrush,
+  pct,
+  runScanChain,
+  stripThink,
+  usd,
+} from "../../lib/agent";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-const GOLDRUSH = "https://api.covalenthq.com/v1";
-
-const CHAINS = {
-  "eth-mainnet": "Ethereum",
-  "base-mainnet": "Base",
-  "arbitrum-mainnet": "Arbitrum",
-  "optimism-mainnet": "Optimism",
-  "matic-mainnet": "Polygon",
-  "bsc-mainnet": "BNB Chain",
-};
-
-const STABLES = new Set([
-  "USDC", "USDT", "DAI", "USDC.E", "USDBC", "FRAX", "LUSD", "TUSD",
-  "USDE", "PYUSD", "GHO", "CRVUSD", "SUSD", "USDS", "BUSD", "USDD",
-]);
-
-const MAJORS = new Set([
-  "ETH", "WETH", "BTC", "WBTC", "CBETH", "WSTETH", "STETH", "RETH",
-  "MATIC", "WMATIC", "BNB", "WBNB", "ARB", "OP", "LINK", "UNI", "AAVE",
-]);
-
-const SPAM_PATTERNS = [
-  /https?:\/\//i,
-  /www\./i,
-  /\.(com|net|org|io|xyz|app|site|top|vip|cc|pro|fi|link)\b/i,
-  /\bclaim\b/i,
-  /\breward/i,
-  /\bairdrop/i,
-  /\bvisit\b/i,
-  /\bvoucher\b/i,
-  /\bgiveaway\b/i,
-  /\bbonus\b/i,
-  /\$\s?\d/,
-  /[\u{1F300}-\u{1FAFF}]/u,
-];
-
-/* ------------------------------------------------------------------ */
-/* helpers                                                             */
-/* ------------------------------------------------------------------ */
-
-const usd = (n) =>
-  n >= 1000
-    ? "$" + Math.round(n).toLocaleString("en-US")
-    : "$" + n.toFixed(2);
-
-const pct = (n) => (n * 100).toFixed(1) + "%";
 
 /* Below this, every ratio a diagnosis rests on is arithmetically true and
    practically meaningless: a third of a cent of ETH reads as "100% concentrated"
@@ -92,176 +64,10 @@ function makeTrace(emit) {
   };
 }
 
-async function goldrush(path, key) {
-  const res = await fetch(`${GOLDRUSH}${path}`, {
-    headers: { Authorization: `Bearer ${key}` },
-    cache: "no-store",
-  });
-  if (!res.ok) {
-    /* The status matters to whoever is reading the trace: a 429 under load and
-       a 401 from a missing key are the same blank screen otherwise. */
-    const why =
-      res.status === 429
-        ? "rate limited"
-        : res.status === 401 || res.status === 403
-        ? "key rejected"
-        : res.status >= 500
-        ? "provider error"
-        : `HTTP ${res.status}`;
-    throw new Error(`GoldRush ${res.status} — ${why}`);
-  }
-  const json = await res.json();
-  if (json.error) throw new Error(json.error_message || "GoldRush error");
-  return json.data;
-}
-
-/* ------------------------------------------------------------------ */
-/* balance failover                                                    */
-/* ------------------------------------------------------------------ */
-
-/* Alchemy is not a replacement for GoldRush and is not wired as one: it has no
-   approvals product and no 30-day portfolio series, so check_approvals and the
-   drawdown check stay on GoldRush. It carries balances only — but balances are
-   the read the whole diagnosis rests on. Lose the series and the run drops one
-   finding; lose balances and there is no report at all. This is the difference
-   between a degraded answer and a blank screen under judging traffic.
-
-   Alchemy's network slugs disagree with Covalent's on three chains, so the
-   mapping is explicit rather than derived. */
-const ALCHEMY_NETWORKS = {
-  "eth-mainnet": "eth-mainnet",
-  "base-mainnet": "base-mainnet",
-  "arbitrum-mainnet": "arb-mainnet",
-  "optimism-mainnet": "opt-mainnet",
-  "matic-mainnet": "matic-mainnet",
-  "bsc-mainnet": "bnb-mainnet",
-};
-
-/* Alchemy reports the native coin as a null tokenAddress with null metadata,
-   so the symbol has to come from the chain rather than the record. */
-const NATIVE_COIN = {
-  "eth-mainnet": ["ETH", "Ether"],
-  "base-mainnet": ["ETH", "Ether"],
-  "arbitrum-mainnet": ["ETH", "Ether"],
-  "optimism-mainnet": ["ETH", "Ether"],
-  "matic-mainnet": ["POL", "Polygon Ecosystem Token"],
-  "bsc-mainnet": ["BNB", "BNB"],
-};
-
-/* Reshaped into Covalent's items[] because classify() is the single place that
-   reads a balance record, and it should not learn about a second provider. */
-async function alchemyBalances(chain, address) {
-  const key = process.env.ALCHEMY_API_KEY;
-  const network = ALCHEMY_NETWORKS[chain];
-  if (!key || !network) return null;
-
-  const res = await fetch(
-    `https://api.g.alchemy.com/data/v1/${key}/assets/tokens/by-address`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      cache: "no-store",
-      body: JSON.stringify({
-        addresses: [{ address, networks: [network] }],
-        withMetadata: true,
-        withPrices: true,
-      }),
-    }
-  );
-  if (!res.ok) throw new Error(`Alchemy ${res.status}`);
-
-  const json = await res.json();
-  const [nativeSymbol, nativeName] = NATIVE_COIN[chain] || ["ETH", "Ether"];
-
-  const items = (json?.data?.tokens || []).map((t) => {
-    const native = !t.tokenAddress;
-    const decimals = t.tokenMetadata?.decimals ?? 18;
-    const rate = Number(
-      (t.tokenPrices || []).find((q) => q.currency === "usd")?.value || 0
-    );
-    /* hex wei, wider than Number can hold exactly */
-    const raw = BigInt(t.tokenBalance || "0x0").toString();
-    const units = Number(raw) / Math.pow(10, decimals);
-
-    return {
-      contract_ticker_symbol: native ? nativeSymbol : t.tokenMetadata?.symbol || "???",
-      contract_name: native ? nativeName : t.tokenMetadata?.name || "Unknown token",
-      contract_address: t.tokenAddress || null,
-      contract_decimals: decimals,
-      balance: raw,
-      quote_rate: rate,
-      quote: units * rate,
-      logo_urls: { token_logo_url: t.tokenMetadata?.logo || null },
-    };
-  });
-
-  return { items };
-}
-
-/* GoldRush first — it is the richer record, and it is the one the rest of the
-   pipeline is calibrated against. Alchemy only answers when it does not. */
-async function fetchBalances(chain, address, key) {
-  try {
-    const data = await goldrush(
-      `/${chain}/address/${address}/balances_v2/?quote-currency=USD&nft=false`,
-      key
-    );
-    if (data?.items?.length) return { data, provider: "goldrush", why: null };
-    return { data, provider: "goldrush", why: null };
-  } catch (err) {
-    const data = await alchemyBalances(chain, address);
-    if (!data) throw err;
-    return { data, provider: "alchemy", why: err.message };
-  }
-}
 
 /* ------------------------------------------------------------------ */
 /* deterministic engine — no model involved                            */
 /* ------------------------------------------------------------------ */
-
-function classify(balances) {
-  const priced = [];
-  const unpriced = [];
-  const spam = [];
-
-  for (const it of balances?.items || []) {
-    if (it.type === "nft") continue;
-
-    const raw = Number(it.balance || 0);
-    if (!raw) continue;
-
-    const symbol = (it.contract_ticker_symbol || "???").toUpperCase();
-    const name = it.contract_name || "Unknown token";
-    const value = Number(it.quote || 0);
-    const rate = Number(it.quote_rate || 0);
-    const decimals = it.contract_decimals ?? 18;
-
-    const rec = {
-      symbol,
-      name,
-      address: it.contract_address,
-      logo: it.logo_urls?.token_logo_url || it.logo_urls?.protocol_logo_url || null,
-      value,
-      rate,
-      units: raw / Math.pow(10, decimals),
-      isStable: STABLES.has(symbol),
-      isMajor: MAJORS.has(symbol),
-    };
-
-    const haystack = `${name} ${symbol}`;
-    if (it.is_spam === true || SPAM_PATTERNS.some((r) => r.test(haystack))) {
-      spam.push(rec);
-      continue;
-    }
-
-    if (!rate || value <= 0) unpriced.push(rec);
-    else priced.push(rec);
-  }
-
-  priced.sort((a, b) => b.value - a.value);
-  unpriced.sort((a, b) => b.units - a.units);
-  return { priced, unpriced, spam };
-}
 
 function buildSeries(portfolio) {
   const map = new Map();
@@ -594,156 +400,28 @@ const AGENT_MIN_STEP_MS = 20_000;
 /* Per-call cap, still applied under the budget above. */
 const AGENT_STEP_TIMEOUT_MS = 90_000;
 
-const SCAN_CHAINS = {
-  ethereum: "eth-mainnet",
-  base: "base-mainnet",
-  arbitrum: "arbitrum-mainnet",
-  optimism: "optimism-mainnet",
-  polygon: "matic-mainnet",
-  bnb: "bsc-mainnet",
-};
-
-const AGENT_TOOLS = [
-  {
-    type: "function",
-    function: {
-      name: "scan_chain",
-      description:
-        "Read this wallet's token balances on another EVM chain. Call this when concentration looks extreme, when the wallet looks nearly empty here, or when the holdings suggest the owner is active elsewhere. Value held on other chains changes what the concentration number actually means.",
-      parameters: {
-        type: "object",
-        properties: {
-          chain: { type: "string", enum: Object.keys(SCAN_CHAINS) },
-        },
-        required: ["chain"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "check_approvals",
-      description:
-        "List outstanding token approvals and how much value each spender could still move today. Call this when the wallet holds material value. An unlimited approval left open to a stale contract is frequently a larger risk than the shape of the portfolio.",
-      parameters: { type: "object", properties: {} },
-    },
-  },
-];
-
-/* Kimi returns its chain of thought inline in `content`, sometimes with an
-   unmatched closing tag. Everything before the last </think> is reasoning. */
-function stripThink(text) {
-  let s = String(text || "");
-  const close = s.lastIndexOf("</think>");
-  if (close !== -1) s = s.slice(close + 8);
-  return s.replace(/<\/?think>/g, "").trim();
+/* Asked for one sentence, the model sometimes answers with a formatted report
+   — headings, bullets, a horizontal rule. The trace is a line, not a document,
+   so flatten it rather than trusting the prompt to hold. */
+function oneLine(text) {
+  return String(text || "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/^\s*(#{1,6}|[-*>]|—)+\s*/gm, "")
+    .replace(/[*_`]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-async function gonkaChat(messages, tools) {
-  const base = (process.env.GONKA_BASE_URL || "").replace(/\/$/, "");
-  const res = await fetch(`${base}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${process.env.GONKA_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: process.env.GONKA_MODEL || "moonshotai/Kimi-K2.6",
-      messages,
-      tools,
-      tool_choice: "auto",
-      /* reasoning is billed against this budget too — a tight cap returns
-         nothing but an unterminated think block */
-      max_tokens: 2000,
-    }),
-  });
-  if (!res.ok) throw new Error(`inference ${res.status}`);
-  const json = await res.json();
-  return json.choices?.[0]?.message || null;
+/* Truncate to the last whole word inside `max` and mark it, so a clipped trace
+   line reads as a summary rather than as a string that got cut off. */
+function clip(text, max) {
+  const s = String(text || "").trim();
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max);
+  const space = cut.lastIndexOf(" ");
+  return (space > max * 0.6 ? cut.slice(0, space) : cut).replace(/[\s,;:.—-]+$/, "") + "…";
 }
 
-async function runScanChain(args, ctx) {
-  const slug = SCAN_CHAINS[args?.chain];
-  if (!slug || slug === ctx.chain) return { error: "not a chain worth scanning" };
-
-  /* The cross-chain scan is the tool that clears a false concentration reading,
-     so it fails over too — a 429 here would leave the agent unable to prove the
-     wallet is fine. */
-  const { data } = await fetchBalances(slug, ctx.address, ctx.key);
-  const b = classify(data);
-  const total = b.priced.reduce((s, p) => s + p.value, 0);
-
-  const result = {
-    chain: CHAINS[slug],
-    slug,
-    totalUsd: Math.round(total),
-    positions: b.priced.length,
-    top: b.priced.slice(0, 5).map((p) => ({
-      symbol: p.symbol,
-      valueUsd: Math.round(p.value),
-      share: total ? +(p.value / total).toFixed(3) : 0,
-    })),
-  };
-  ctx.scans.push(result);
-  return result;
-}
-
-async function runCheckApprovals(_args, ctx) {
-  const data = await goldrush(`/${ctx.chain}/approvals/${ctx.address}/`, ctx.key);
-
-  /* Deterministic ranking, grouped by token. Several spenders can each hold an
-     allowance over the SAME balance, and the API repeats that balance on every
-     one of them — so exposure is per token, not per spender. Summing spenders
-     would count the same coins once per approval. */
-  const byToken = new Map();
-
-  for (const item of data?.items || []) {
-    const symbol = item.ticker_symbol || "???";
-    const spenders = (item.spenders || []).filter(
-      (sp) => Number(sp.value_at_risk_quote || 0) > 0
-    );
-    if (!spenders.length) continue;
-
-    /* one loss, not one per spender */
-    const exposure = Math.max(...spenders.map((sp) => Number(sp.value_at_risk_quote || 0)));
-    const worst = spenders.reduce((a, b) =>
-      Number(b.value_at_risk_quote || 0) > Number(a.value_at_risk_quote || 0) ? b : a
-    );
-
-    const prior = byToken.get(symbol);
-    if (prior && prior.valueAtRisk >= exposure) {
-      prior.spenderCount += spenders.length;
-      continue;
-    }
-    byToken.set(symbol, {
-      symbol,
-      valueAtRisk: exposure,
-      spenderCount: (prior?.spenderCount || 0) + spenders.length,
-      spender: worst.spender_address,
-      unlimited: spenders.some((sp) => sp.allowance === "UNLIMITED"),
-      lastSeen: worst.block_signed_at || null,
-      flag: worst.risk_factor || null,
-    });
-  }
-
-  const risky = [...byToken.values()].sort((a, b) => b.valueAtRisk - a.valueAtRisk);
-  ctx.approvals = risky;
-
-  return {
-    tokensExposed: risky.length,
-    openApprovals: risky.reduce((s, r) => s + r.spenderCount, 0),
-    totalValueAtRiskUsd: Math.round(risky.reduce((s, r) => s + r.valueAtRisk, 0)),
-    top: risky.slice(0, 5).map((r) => ({
-      token: r.symbol,
-      spenders: r.spenderCount,
-      unlimited: r.unlimited,
-      valueAtRiskUsd: Math.round(r.valueAtRisk),
-      approvedOn: r.lastSeen ? String(r.lastSeen).slice(0, 10) : null,
-    })),
-  };
-}
-
-const TOOL_IMPL = { scan_chain: runScanChain, check_approvals: runCheckApprovals };
 
 /* Findings produced from what the investigation turned up. Still no model
    arithmetic — these are computed here, from tool output. */
@@ -892,6 +570,52 @@ function approvalFindings(risky) {
   ];
 }
 
+/* The agent picks which position is worth inspecting; the arithmetic is the
+   engine's, so a thin-float discovery moves the score exactly the way every
+   other finding does. A tightly held supply is only a finding when the wallet
+   actually has something in it — a ghost token you hold $12 of is noise. */
+function tokenDepthFindings(checks = []) {
+  const out = [];
+
+  for (const t of checks) {
+    if (!t || t.error) continue;
+
+    const share = t.walletShare || 0;
+    if (share < 0.05) continue;
+
+    const tight = t.top10SupplyShare != null && t.top10SupplyShare >= 0.7;
+    const few = t.holders != null && t.holders < 5000;
+    if (!tight && !few) continue;
+
+    const severity = tight && share >= 0.1 ? "critical" : "warn";
+
+    out.push({
+      id: `depth-${String(t.symbol).toLowerCase()}`,
+      severity,
+      title: `${t.symbol} is ${pct(share)} of the wallet and thinly held`,
+      detail: `${
+        tight
+          ? `The ten largest addresses control ${pct(
+              t.top10SupplyShare
+            )} of ${t.symbol}'s supply.`
+          : `${t.symbol} is held by ${t.holders.toLocaleString("en-US")} addresses.`
+      } The position is ${usd(
+        t.positionUsd
+      )}. Concentration measures how much of the wallet rides on one name; this measures whether that name can be sold at all. A supply held by a handful of addresses is one where exiting at size is itself the event that moves the price.`,
+      evidence: [
+        t.holders != null ? `${t.holders.toLocaleString("en-US")} holders` : null,
+        t.top10SupplyShare != null ? `top 10 hold ${pct(t.top10SupplyShare)} of supply` : null,
+        t.asOf ? `as of ${t.asOf}` : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      penalty: severity === "critical" ? 12 : 6,
+    });
+  }
+
+  return out;
+}
+
 async function investigate(ctx) {
   const { trace, report } = ctx;
 
@@ -906,13 +630,14 @@ async function investigate(ctx) {
     "Your only job is to decide which follow-up tools to call. You never compute or state a number yourself.",
     "Call scan_chain when the concentration reading might be an artifact of looking at one chain, or when the wallet looks thin here.",
     "Call check_approvals when the wallet holds real value, because open approvals are a risk the portfolio shape cannot show.",
+    "Call inspect_token on a position that carries a large share of the wallet, naming it by its symbol. The engine can see how big a position is but not whether it can be sold — that depends on how the token's supply is distributed.",
     ...(report.gradable
       ? []
       : [
           "This wallet is below the value floor, so the engine refused to score it. The only question worth answering is whether the address is unused or simply active somewhere else. Call scan_chain on the chains most likely to hold the balance, and do not call check_approvals — there is nothing here to take.",
         ]),
     "You may call several tools at once. Stop calling tools when further lookups would not change the diagnosis.",
-    "When you are done, reply with one short sentence naming what you checked and why. No numbers.",
+    "When you are done, reply with one short plain sentence naming what you checked and why. No numbers, no markdown, no headings or bullets — the engine writes the report, not you.",
   ].join("\n");
 
   const messages = [
@@ -927,6 +652,13 @@ async function investigate(ctx) {
             totalValueUsd: Math.round(report.total),
             healthScore: report.score,
             metrics: report.metrics,
+            /* the agent can only inspect a token it has been shown, which is
+               also what stops it naming one that is not in the wallet */
+            topHoldings: (ctx.holdings || []).slice(0, 8).map((h) => ({
+              symbol: h.symbol,
+              valueUsd: Math.round(h.value || 0),
+              share: +(h.share || 0).toFixed(3),
+            })),
             findings: report.findings.map((f) => ({
               severity: f.severity,
               title: f.title,
@@ -972,7 +704,9 @@ async function investigate(ctx) {
 
     if (!calls.length) {
       const closing = stripThink(msg.content);
-      if (closing) trace.note("agent.conclude", closing.slice(0, 160));
+      /* cut on a word boundary — a trace line ending mid-word ("…is now
+         clear. Her") reads as a truncation bug rather than a summary */
+      if (closing) trace.note("agent.conclude", clip(oneLine(closing), 160));
       break;
     }
 
@@ -986,7 +720,12 @@ async function investigate(ctx) {
         } catch {
           /* malformed arguments — the impl will reject it */
         }
-        const label = args.chain ? `${name}(${args.chain})` : `${name}()`;
+        /* label from whatever the tool was actually given — hardcoding `chain`
+           left every inspect_token call reading as a bare `inspect_token()` */
+        const shown = Object.values(args || {})
+          .filter((v) => typeof v === "string" && v.trim())
+          .join(", ");
+        const label = `${name}(${shown})`;
 
         const out = await trace.run("agent.tool", `${label} — the agent chose this`, () =>
           TOOL_IMPL[name] ? TOOL_IMPL[name](args, ctx) : Promise.resolve({ error: "no such tool" })
@@ -1001,7 +740,11 @@ async function investigate(ctx) {
     );
   }
 
-  return [...crossChainFindings(report, ctx.scans), ...approvalFindings(ctx.approvals)];
+  return [
+    ...crossChainFindings(report, ctx.scans),
+    ...approvalFindings(ctx.approvals),
+    ...tokenDepthFindings(ctx.tokenChecks),
+  ];
 }
 
 /* ------------------------------------------------------------------ */
@@ -1236,6 +979,15 @@ async function analyze({ address, chain, chainLabel, key, trace, send }) {
     report,
     scans: [],
     approvals: null,
+    tokenChecks: [],
+    /* symbol → contract, so inspect_token resolves a name the agent was shown
+       instead of accepting an address it could have invented */
+    holdings: buckets.priced.map((p) => ({
+      symbol: p.symbol,
+      address: p.address,
+      value: p.value,
+      share: report.total ? p.value / report.total : 0,
+    })),
     deadline: startedAt + AGENT_BUDGET_MS,
   };
 
@@ -1338,6 +1090,8 @@ async function analyze({ address, chain, chainLabel, key, trace, send }) {
       holdings: buckets.priced.slice(0, 12).map((p) => ({
         symbol: p.symbol,
         name: p.name,
+        /* carried so the chat route can resolve inspect_token by symbol */
+        address: p.address,
         logo: p.logo,
         value: p.value,
         units: p.units,

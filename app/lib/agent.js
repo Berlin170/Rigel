@@ -52,15 +52,130 @@ export const usd = (n) =>
 
 export const pct = (n) => (n * 100).toFixed(1) + "%";
 
-export async function goldrush(path, key) {
-  const res = await fetch(`${GOLDRUSH}${path}`, {
-    headers: { Authorization: `Bearer ${key}` },
+/* The agent fires its chosen lookups concurrently, and GoldRush throttles a
+   burst from one key with a 403 — not a 401-shaped "your key is bad", just a
+   momentary no. Measured on a four-call step: three came back 403 and the
+   identical calls succeeded ~2s later. Retrying transient statuses here is the
+   difference between a trace full of red and one that reads as a clean run. */
+export async function goldrush(path, key, { tries = 3 } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(`${GOLDRUSH}${path}`, {
+      headers: { Authorization: `Bearer ${key}` },
+      cache: "no-store",
+    });
+
+    if (res.ok) {
+      const json = await res.json();
+      if (json.error) throw new Error(json.error_message || "GoldRush error");
+      return json.data;
+    }
+
+    const transient = res.status === 429 || res.status === 403 || res.status >= 500;
+    if (transient && attempt < tries - 1) {
+      await new Promise((r) => setTimeout(r, 500 * 2 ** attempt + Math.random() * 300));
+      continue;
+    }
+
+    /* The status matters to whoever is reading the trace: a 429 under load and
+       a 401 from a missing key are the same blank screen otherwise. 403 only
+       reaches here after the retries, so by now it really is a refusal. */
+    const why =
+      res.status === 429
+        ? "rate limited"
+        : res.status === 401
+        ? "key rejected"
+        : res.status === 403
+        ? "throttled or forbidden after retries"
+        : res.status >= 500
+        ? "provider error"
+        : `HTTP ${res.status}`;
+    throw new Error(`GoldRush ${res.status} — ${why}`);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* balance failover                                                    */
+/* ------------------------------------------------------------------ */
+
+const ALCHEMY_NETWORKS = {
+  "eth-mainnet": "eth-mainnet",
+  "base-mainnet": "base-mainnet",
+  "arbitrum-mainnet": "arb-mainnet",
+  "optimism-mainnet": "opt-mainnet",
+  "matic-mainnet": "matic-mainnet",
+  "bsc-mainnet": "bnb-mainnet",
+};
+
+/* Alchemy reports the native coin as a null tokenAddress with null metadata,
+   so the symbol has to come from the chain rather than the record. */
+const NATIVE_COIN = {
+  "eth-mainnet": ["ETH", "Ether"],
+  "base-mainnet": ["ETH", "Ether"],
+  "arbitrum-mainnet": ["ETH", "Ether"],
+  "optimism-mainnet": ["ETH", "Ether"],
+  "matic-mainnet": ["POL", "Polygon Ecosystem Token"],
+  "bsc-mainnet": ["BNB", "BNB"],
+};
+
+/* Reshaped into Covalent's items[] because classify() is the single place that
+   reads a balance record, and it should not learn about a second provider. */
+export async function alchemyBalances(chain, address) {
+  const key = process.env.ALCHEMY_API_KEY;
+  const network = ALCHEMY_NETWORKS[chain];
+  if (!key || !network) return null;
+
+  const res = await fetch(`https://api.g.alchemy.com/data/v1/${key}/assets/tokens/by-address`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     cache: "no-store",
+    body: JSON.stringify({
+      addresses: [{ address, networks: [network] }],
+      withMetadata: true,
+      withPrices: true,
+    }),
   });
-  if (!res.ok) throw new Error(`chain data ${res.status}`);
+  if (!res.ok) throw new Error(`Alchemy ${res.status}`);
+
   const json = await res.json();
-  if (json.error) throw new Error(json.error_message || "chain data error");
-  return json.data;
+  const [nativeSymbol, nativeName] = NATIVE_COIN[chain] || ["ETH", "Ether"];
+
+  const items = (json?.data?.tokens || []).map((t) => {
+    const native = !t.tokenAddress;
+    const decimals = t.tokenMetadata?.decimals ?? 18;
+    const rate = Number((t.tokenPrices || []).find((q) => q.currency === "usd")?.value || 0);
+    /* hex wei, wider than Number can hold exactly */
+    const raw = BigInt(t.tokenBalance || "0x0").toString();
+    const units = Number(raw) / Math.pow(10, decimals);
+
+    return {
+      contract_ticker_symbol: native ? nativeSymbol : t.tokenMetadata?.symbol || "???",
+      contract_name: native ? nativeName : t.tokenMetadata?.name || "Unknown token",
+      contract_address: t.tokenAddress || null,
+      contract_decimals: decimals,
+      balance: raw,
+      quote_rate: rate,
+      quote: units * rate,
+      logo_urls: { token_logo_url: t.tokenMetadata?.logo || null },
+    };
+  });
+
+  return { items };
+}
+
+/* GoldRush first — it is the richer record, and it is the one the rest of the
+   pipeline is calibrated against. Alchemy only answers when it does not. */
+export async function fetchBalances(chain, address, key) {
+  try {
+    const data = await goldrush(
+      `/${chain}/address/${address}/balances_v2/?quote-currency=USD&nft=false`,
+      key
+    );
+    return { data, provider: "goldrush", why: null };
+  } catch (err) {
+    const data = await alchemyBalances(chain, address);
+    if (!data) throw err;
+    return { data, provider: "alchemy", why: err.message };
+  }
 }
 
 export function classify(balances) {
@@ -334,16 +449,34 @@ export const AGENT_TOOLS = [
       parameters: { type: "object", properties: {} },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "inspect_token",
+      description:
+        "Look up how one token this wallet holds is distributed: how many addresses hold it, and how much of the supply the largest holders control. Call this when a single position carries a large share of the wallet, or when a material holding is a name that would not be widely held. Concentration is only half the question — a position is a different risk when the token is held by millions of addresses than when ten addresses control most of the supply and it cannot be exited at size.",
+      parameters: {
+        type: "object",
+        properties: {
+          symbol: {
+            type: "string",
+            description: "Ticker symbol, exactly as it appears in the holdings.",
+          },
+        },
+        required: ["symbol"],
+      },
+    },
+  },
 ];
 
 export async function runScanChain(args, ctx) {
   const slug = SCAN_CHAINS[args?.chain];
   if (!slug || slug === ctx.chain) return { error: "not a chain worth scanning" };
 
-  const data = await goldrush(
-    `/${slug}/address/${ctx.address}/balances_v2/?quote-currency=USD&nft=false`,
-    ctx.key
-  );
+  /* The cross-chain scan is the tool that clears a false concentration reading,
+     so it fails over too — a 429 here would leave the agent unable to prove the
+     wallet is fine. */
+  const { data } = await fetchBalances(slug, ctx.address, ctx.key);
   const b = classify(data);
   const total = b.priced.reduce((s, p) => s + p.value, 0);
 
@@ -416,7 +549,43 @@ export async function runCheckApprovals(_args, ctx) {
   };
 }
 
+/* The agent names a symbol it was shown; resolving that to a contract here
+   rather than letting the model pass an address means it cannot invent one. */
+export async function runInspectToken(args, ctx) {
+  const want = String(args?.symbol || "").trim().toUpperCase();
+  if (!want) return { error: "name a token symbol from the holdings" };
+
+  const held = (ctx.holdings || []).find((h) => String(h.symbol).toUpperCase() === want);
+  if (!held?.address) return { error: `${want} is not a priced holding on this chain` };
+
+  const data = await goldrush(`/${ctx.chain}/tokens/${held.address}/token_holders_v2/`, ctx.key);
+
+  /* One page is the top holders by balance, and pagination carries the full
+     holder count — enough to say whether supply sits in a few hands without
+     walking millions of rows. */
+  const items = data?.items || [];
+  if (!items.length) return { error: `no holder data for ${want}` };
+
+  const scale = Math.pow(10, items[0]?.contract_decimals ?? 18);
+  const supply = Number(items[0]?.total_supply || 0) / scale;
+  const balances = items.map((i) => Number(i.balance || 0) / scale).sort((a, b) => b - a);
+  const top10 = balances.slice(0, 10).reduce((s, b) => s + b, 0);
+
+  const result = {
+    symbol: want,
+    holders: data?.pagination?.total_count ?? null,
+    top10SupplyShare: supply > 0 ? +(top10 / supply).toFixed(3) : null,
+    positionUsd: Math.round(held.value || 0),
+    walletShare: +(held.share || 0).toFixed(3),
+    asOf: data?.updated_at ? String(data.updated_at).slice(0, 10) : null,
+  };
+
+  ctx.tokenChecks?.push(result);
+  return result;
+}
+
 export const TOOL_IMPL = {
   scan_chain: runScanChain,
   check_approvals: runCheckApprovals,
+  inspect_token: runInspectToken,
 };

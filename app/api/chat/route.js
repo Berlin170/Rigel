@@ -137,7 +137,17 @@ export async function POST(req) {
         }
       };
 
-      const ctx = { address, chain, key, scans: [], approvals: null };
+      /* holdings carry the contract addresses, so inspect_token resolves a
+         symbol the report already showed rather than one the model made up */
+      const ctx = {
+        address,
+        chain,
+        key,
+        scans: [],
+        approvals: null,
+        tokenChecks: [],
+        holdings: report.holdings || [],
+      };
 
       try {
         for (let step = 0; step < MAX_STEPS; step++) {
