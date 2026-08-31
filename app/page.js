@@ -211,7 +211,11 @@ function Constellation({ holdings, address }) {
    opened on a chart and the trace sat collapsed at the bottom. This replays
    one real run — jesse.base.eth, health 85 down to 67 — on a loop, so what
    the thing actually does is legible before anyone types an address.
-   Pure CSS on staged delays; no state, no hydration cost. */
+   Pure CSS on staged delays; no state, no hydration cost. It is labelled a
+   recorded run because it reads as a live readout otherwise — the numbers are
+   frozen, so a visitor who diagnoses a wallet and sees them unchanged concludes
+   the tool is broken. jesse.base.eth sits in the sample buttons directly below,
+   which turns the claim into one anybody can re-run. */
 const LOOP_STAGES = [
   { k: "engine", label: "engine", detail: "9 checks · Base · health 85" },
   { k: "decide", label: "agent", detail: "this wallet holds enough to be worth draining" },
@@ -240,6 +244,7 @@ function AgentLoop() {
         <span className="loop-caption">
           the score moved because the agent went looking, not because a model said so
         </span>
+        <span className="loop-replay">recorded run · jesse.base.eth</span>
       </div>
     </div>
   );

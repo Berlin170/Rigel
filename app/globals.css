@@ -1127,6 +1127,24 @@ select:focus-visible,
   color: var(--paper-dim);
 }
 
+/* The strip is frozen output, so it has to say so — unlabelled, it reads as a
+   live readout and the static numbers look like a stuck app. */
+.loop-replay {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--star);
+  opacity: 0.72;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .loop-replay {
+    margin-left: 0;
+  }
+}
+
 /* ---------- what the agent did ---------- */
 
 .agentsum {
