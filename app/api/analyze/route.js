@@ -116,6 +116,106 @@ async function goldrush(path, key) {
 }
 
 /* ------------------------------------------------------------------ */
+/* balance failover                                                    */
+/* ------------------------------------------------------------------ */
+
+/* Alchemy is not a replacement for GoldRush and is not wired as one: it has no
+   approvals product and no 30-day portfolio series, so check_approvals and the
+   drawdown check stay on GoldRush. It carries balances only — but balances are
+   the read the whole diagnosis rests on. Lose the series and the run drops one
+   finding; lose balances and there is no report at all. This is the difference
+   between a degraded answer and a blank screen under judging traffic.
+
+   Alchemy's network slugs disagree with Covalent's on three chains, so the
+   mapping is explicit rather than derived. */
+const ALCHEMY_NETWORKS = {
+  "eth-mainnet": "eth-mainnet",
+  "base-mainnet": "base-mainnet",
+  "arbitrum-mainnet": "arb-mainnet",
+  "optimism-mainnet": "opt-mainnet",
+  "matic-mainnet": "matic-mainnet",
+  "bsc-mainnet": "bnb-mainnet",
+};
+
+/* Alchemy reports the native coin as a null tokenAddress with null metadata,
+   so the symbol has to come from the chain rather than the record. */
+const NATIVE_COIN = {
+  "eth-mainnet": ["ETH", "Ether"],
+  "base-mainnet": ["ETH", "Ether"],
+  "arbitrum-mainnet": ["ETH", "Ether"],
+  "optimism-mainnet": ["ETH", "Ether"],
+  "matic-mainnet": ["POL", "Polygon Ecosystem Token"],
+  "bsc-mainnet": ["BNB", "BNB"],
+};
+
+/* Reshaped into Covalent's items[] because classify() is the single place that
+   reads a balance record, and it should not learn about a second provider. */
+async function alchemyBalances(chain, address) {
+  const key = process.env.ALCHEMY_API_KEY;
+  const network = ALCHEMY_NETWORKS[chain];
+  if (!key || !network) return null;
+
+  const res = await fetch(
+    `https://api.g.alchemy.com/data/v1/${key}/assets/tokens/by-address`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({
+        addresses: [{ address, networks: [network] }],
+        withMetadata: true,
+        withPrices: true,
+      }),
+    }
+  );
+  if (!res.ok) throw new Error(`Alchemy ${res.status}`);
+
+  const json = await res.json();
+  const [nativeSymbol, nativeName] = NATIVE_COIN[chain] || ["ETH", "Ether"];
+
+  const items = (json?.data?.tokens || []).map((t) => {
+    const native = !t.tokenAddress;
+    const decimals = t.tokenMetadata?.decimals ?? 18;
+    const rate = Number(
+      (t.tokenPrices || []).find((q) => q.currency === "usd")?.value || 0
+    );
+    /* hex wei, wider than Number can hold exactly */
+    const raw = BigInt(t.tokenBalance || "0x0").toString();
+    const units = Number(raw) / Math.pow(10, decimals);
+
+    return {
+      contract_ticker_symbol: native ? nativeSymbol : t.tokenMetadata?.symbol || "???",
+      contract_name: native ? nativeName : t.tokenMetadata?.name || "Unknown token",
+      contract_address: t.tokenAddress || null,
+      contract_decimals: decimals,
+      balance: raw,
+      quote_rate: rate,
+      quote: units * rate,
+      logo_urls: { token_logo_url: t.tokenMetadata?.logo || null },
+    };
+  });
+
+  return { items };
+}
+
+/* GoldRush first — it is the richer record, and it is the one the rest of the
+   pipeline is calibrated against. Alchemy only answers when it does not. */
+async function fetchBalances(chain, address, key) {
+  try {
+    const data = await goldrush(
+      `/${chain}/address/${address}/balances_v2/?quote-currency=USD&nft=false`,
+      key
+    );
+    if (data?.items?.length) return { data, provider: "goldrush", why: null };
+    return { data, provider: "goldrush", why: null };
+  } catch (err) {
+    const data = await alchemyBalances(chain, address);
+    if (!data) throw err;
+    return { data, provider: "alchemy", why: err.message };
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* deterministic engine — no model involved                            */
 /* ------------------------------------------------------------------ */
 
@@ -566,10 +666,10 @@ async function runScanChain(args, ctx) {
   const slug = SCAN_CHAINS[args?.chain];
   if (!slug || slug === ctx.chain) return { error: "not a chain worth scanning" };
 
-  const data = await goldrush(
-    `/${slug}/address/${ctx.address}/balances_v2/?quote-currency=USD&nft=false`,
-    ctx.key
-  );
+  /* The cross-chain scan is the tool that clears a false concentration reading,
+     so it fails over too — a 429 here would leave the agent unable to prove the
+     wallet is fine. */
+  const { data } = await fetchBalances(slug, ctx.address, ctx.key);
   const b = classify(data);
   const total = b.priced.reduce((s, p) => s + p.value, 0);
 
@@ -1046,15 +1146,11 @@ async function analyze({ address, chain, chainLabel, key, trace, send }) {
      so they run concurrently. Sequentially this was ~51s; now it costs the
      slowest of the three. Steps stream in completion order, which is honest
      and reads as live. */
-  const [balances, portfolio, txs] = await Promise.all([
+  const [balanceRead, portfolio, txs] = await Promise.all([
     trace.run(
       "chain.balances",
       `${chainLabel} · token balances and USD quotes`,
-      () =>
-        goldrush(
-          `/${chain}/address/${address}/balances_v2/?quote-currency=USD&nft=false`,
-          key
-        )
+      () => fetchBalances(chain, address, key)
     ),
     trace.run("chain.portfolio", `${chainLabel} · 30-day daily holdings series`, () =>
       goldrush(`/${chain}/address/${address}/portfolio_v2/?quote-currency=USD`, key)
@@ -1066,12 +1162,24 @@ async function analyze({ address, chain, chainLabel, key, trace, send }) {
     ),
   ]);
 
+  const balances = balanceRead?.data;
+
   if (!balances) {
     send({
       t: "error",
       error: "The chain data provider did not return balances for this address. Try again.",
     });
     return;
+  }
+
+  /* Which provider answered is part of the reading of the report, not a detail:
+     on Alchemy the drawdown check has no series behind it. */
+  const onBackupData = balanceRead.provider === "alchemy";
+  if (onBackupData) {
+    trace.note(
+      "chain.failover",
+      `GoldRush balances unavailable (${balanceRead.why}) — balances read from Alchemy instead`
+    );
   }
 
   const buckets = classify(balances);
@@ -1087,6 +1195,31 @@ async function analyze({ address, chain, chainLabel, key, trace, send }) {
 
   const report = diagnose(buckets, series, lastTx, chainLabel);
   report.chainLabel = chainLabel;
+
+  /* Backup balances keep the report alive; they must not be allowed to publish
+     a number. Every ratio the score rests on — concentration, dry powder,
+     long-tail weight — is taken over priced value, so a thinner price feed
+     moves the score without anything in the wallet changing. Measured on
+     jesse.base.eth: GoldRush prices 374 positions and scores 85, Alchemy
+     prices 3 of the same wallet and the identical engine returns 48. Neither
+     number is wrong arithmetic; the second one is answering a different
+     question. The header promises this app never invents a number, so under
+     failover it reports what it found and withholds the grade — the same
+     contract the dust floor already keeps. */
+  if (onBackupData && report.gradable) {
+    report.gradable = false;
+    report.score = null;
+    report.grade = "Not scored — backup data";
+    report.findings.unshift({
+      id: "backup-data",
+      severity: "note",
+      title: "Not scored: the primary data provider was unavailable",
+      detail:
+        "Balances came from the backup provider, which prices fewer positions than the primary one. The health score is a ratio over priced value, so scoring this would measure the price feed rather than the wallet. The findings below are real and were computed the usual way; only the number is withheld.",
+      evidence: `${buckets.priced.length} priced · ${buckets.unpriced.length} unpriced on backup data`,
+      penalty: 0,
+    });
+  }
   trace.note(
     "engine.diagnose",
     `${report.findings.length} findings · health ${report.score ?? "n/a"}/100`
@@ -1154,7 +1287,9 @@ async function analyze({ address, chain, chainLabel, key, trace, send }) {
 
     trace.note(
       "engine.revise",
-      `${extra.length} finding${extra.length === 1 ? "" : "s"} added · health ${report.score}/100`
+      `${extra.length} finding${extra.length === 1 ? "" : "s"} added · health ${
+        report.score ?? "n/a"
+      }/100`
     );
   }
 

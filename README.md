@@ -14,9 +14,9 @@ Paste any EVM address. A deterministic engine reads the wallet and measures what
 
 The first pass is fixed: three chain reads, nine deterministic checks, a health score. Then the model gets the engine's output and decides for itself what to investigate.
 
-On a wallet that looks 70% concentrated, it has chosen to scan Base and Arbitrum to test whether the concentration was an artifact of looking at one chain, and to pull the token approvals because a wallet holding real value can be drained without the portfolio shape ever showing it. It called those three lookups in one turn, then stopped, because more lookups would not have changed the diagnosis.
+On `vitalik.eth`, which reads as heavily concentrated on Base, it chose to pull the token approvals — a wallet holding real value can be drained without the portfolio shape ever showing it — and to scan Ethereum, to test whether the concentration was an artifact of looking at one chain. Then it stopped, because more lookups would not have changed the diagnosis.
 
-That run took the health score from **46 to 28** — not because the model decided so, but because `check_approvals` surfaced $3,143 reachable through 17 live approvals, and the engine scored it.
+That run took the health score from **46 to 68**. The score went *up*, and not because the model decided so: the Ethereum scan showed the wallet's real size, the engine refunded a concentration penalty it could no longer justify, and the approvals came back with little behind them. An investigation that can clear a wallet is the same mechanism as one that can condemn it — `jesse.base.eth` runs the identical loop and comes out at 85 → 67.
 
 The trace at the bottom of every report shows each decision as it happens, streamed live while the agent works.
 
@@ -69,12 +69,15 @@ The second run is the one worth watching. Nothing about the portfolio's shape ch
 | Variable | Required | What it is |
 |---|---|---|
 | `GOLDRUSH_API_KEY` | yes | Chain data key |
+| `ALCHEMY_API_KEY` | no | Balance failover when GoldRush does not answer |
 | `LLM_API_KEY` | no | Anthropic key for the written diagnosis |
 | `LLM_BASE_URL` | no | Defaults to `https://api.anthropic.com` |
 | `LLM_MODEL` | no | Defaults to `claude-sonnet-4-6` |
 | `GONKA_API_KEY` | no | Broker key for the agent loop and chat |
 | `GONKA_BASE_URL` | no | Your broker's OpenAI-compatible base URL |
 | `GONKA_MODEL` | no | Defaults to `moonshotai/Kimi-K2.6` |
+
+**Failover.** If GoldRush does not return balances, the read falls back to Alchemy, which covers balances and prices but has no approvals endpoint and no 30-day series. A report served from the backup provider is **not scored** — the health score is a ratio over priced value, and the two providers price different numbers of positions, so grading one against the other would measure the feed rather than the wallet. The findings still render and the trace says which provider answered.
 
 Every optional key degrades cleanly. Without `GONKA_*` the agent loop is skipped and the report falls back to the baseline nine checks. Without `LLM_API_KEY` the findings render with a notice instead of the written diagnosis. Never put keys in client code — every call goes through a server route.
 
