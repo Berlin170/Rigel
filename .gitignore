@@ -2,8 +2,7 @@ node_modules
 .next
 .vercel
 
-.env
-.env.local
+.env*
 !.env.example
 
 .claude/settings.local.json
