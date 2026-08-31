@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const CHAINS = [
   ["base-mainnet", "Base"],
@@ -31,6 +31,8 @@ const usd = (n) =>
     : "$" + n.toFixed(2);
 
 const pct = (n) => (n == null ? "—" : (n * 100).toFixed(1) + "%");
+
+const chainLabel = (v) => (CHAINS.find(([id]) => id === v) || [, v])[1];
 
 /* deterministic pseudo-random from a string, for background star field */
 function seeded(str, i) {
@@ -72,14 +74,14 @@ function Constellation({ holdings, address }) {
 
   const colorOf = (s) =>
     s.share >= 0.6
-      ? "var(--crimson)"
+      ? "var(--bad)"
       : s.share >= 0.4
-      ? "var(--amber)"
+      ? "var(--accent)"
       : s.isStable
-      ? "var(--cyan)"
+      ? "var(--ok)"
       : s.isMajor
-      ? "var(--star)"
-      : "var(--amber)";
+      ? "var(--fg)"
+      : "var(--accent)";
 
   const radiusOf = (s) => 4 + Math.sqrt(s.share) * 26;
 
@@ -100,9 +102,13 @@ function Constellation({ holdings, address }) {
 
   return (
     <div className="chart-frame">
-      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Portfolio plotted as a star chart, position size by share of value">
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        role="img"
+        aria-label="Portfolio plotted as a star chart, position size by share of value"
+      >
         {bg.map((b, i) => (
-          <circle key={"bg" + i} cx={b.x} cy={b.y} r={b.r} fill="#3a4478" opacity="0.6" />
+          <circle key={"bg" + i} cx={b.x} cy={b.y} r={b.r} fill="#2b3145" opacity="0.7" />
         ))}
 
         {guides.map((g) => (
@@ -112,14 +118,14 @@ function Constellation({ holdings, address }) {
               x2={W - padR + 6}
               y1={yScale(g.share)}
               y2={yScale(g.share)}
-              stroke="var(--rule)"
+              stroke="var(--border-strong)"
               strokeDasharray="3 6"
             />
             <text
               x={W - padR + 14}
               y={yScale(g.share) + 4}
               textAnchor="start"
-              fill="var(--paper-dim)"
+              fill="var(--fg-dim)"
               fontFamily="var(--mono)"
               fontSize="9.5"
               letterSpacing="1.4"
@@ -134,7 +140,7 @@ function Constellation({ holdings, address }) {
           d={line}
           pathLength="1"
           fill="none"
-          stroke="var(--rule)"
+          stroke="var(--border-strong)"
           strokeWidth="1"
         />
 
@@ -157,7 +163,7 @@ function Constellation({ holdings, address }) {
                   x={cx}
                   y={H - padB + 20}
                   textAnchor="middle"
-                  fill="var(--paper-dim)"
+                  fill="var(--fg-dim)"
                   fontFamily="var(--mono)"
                   fontSize="10.5"
                   letterSpacing="0.8"
@@ -172,7 +178,7 @@ function Constellation({ holdings, address }) {
                   x={cx}
                   y={cy - r - 12}
                   textAnchor="middle"
-                  fill="var(--star)"
+                  fill="var(--fg)"
                   fontFamily="var(--mono)"
                   fontSize="12"
                 >
@@ -186,16 +192,16 @@ function Constellation({ holdings, address }) {
 
       <div className="chart-legend">
         <span>
-          <i className="dot" style={{ background: "var(--star)" }} /> major
+          <i className="dot" style={{ background: "var(--fg)" }} /> major
         </span>
         <span>
-          <i className="dot" style={{ background: "var(--cyan)" }} /> stable
+          <i className="dot" style={{ background: "var(--ok)" }} /> stable
         </span>
         <span>
-          <i className="dot" style={{ background: "var(--amber)" }} /> long tail
+          <i className="dot" style={{ background: "var(--accent)" }} /> long tail
         </span>
         <span>
-          <i className="dot" style={{ background: "var(--crimson)" }} /> dominant
+          <i className="dot" style={{ background: "var(--bad)" }} /> dominant
         </span>
         <span style={{ marginLeft: "auto" }}>size = share of value</span>
       </div>
@@ -203,49 +209,71 @@ function Constellation({ holdings, address }) {
   );
 }
 
-/* ---------------------------------------------------------------- */
-/* the loop, running on the landing page                              */
-/* ---------------------------------------------------------------- */
+/* ================================================================== */
+/* THE CONSOLE                                                        */
+/*                                                                    */
+/* The agency used to be invisible until you committed to a 110-second */
+/* run: the page opened on a chart and the trace sat collapsed at the  */
+/* bottom. Now one surface carries all three states. Idle it replays a */
+/* real recorded run — jesse.base.eth, 85 down to 67 — typing itself   */
+/* out on a loop. Hit Diagnose and the same rows stream live from the  */
+/* server. Same grammar throughout, so the thing above the fold is     */
+/* visibly the same machine you are about to point at your own wallet. */
+/* The replay is labelled a replay: unlabelled it reads as live, and   */
+/* a visitor whose own run shows different numbers concludes it broke. */
+/* ================================================================== */
 
-/* The agency was invisible until you committed to a 110-second run: the page
-   opened on a chart and the trace sat collapsed at the bottom. This replays
-   one real run — jesse.base.eth, health 85 down to 67 — on a loop, so what
-   the thing actually does is legible before anyone types an address.
-   Pure CSS on staged delays; no state, no hydration cost. It is labelled a
-   recorded run because it reads as a live readout otherwise — the numbers are
-   frozen, so a visitor who diagnoses a wallet and sees them unchanged concludes
-   the tool is broken. jesse.base.eth sits in the sample buttons directly below,
-   which turns the claim into one anybody can re-run. */
-const LOOP_STAGES = [
-  { k: "engine", label: "engine", detail: "9 checks · Base · health 85" },
-  { k: "decide", label: "agent", detail: "this wallet holds enough to be worth draining" },
-  { k: "tool", label: "check_approvals()", detail: "19 live approvals · $1,293 reachable" },
-  { k: "rescore", label: "engine", detail: "re-scored on what came back · health 67" },
+const REPLAY = [
+  { tool: "resolve", detail: "jesse.base.eth → 0x8491…8bf1", ms: 210 },
+  { tool: "chain.portfolio", detail: "Base · 30-day daily holdings series", ms: 1840 },
+  { tool: "engine.score", detail: "9 checks · nothing alarming on one chain · health 85", ms: 12 },
+  { tool: "agent.decide", detail: "this wallet holds enough to be worth draining", ms: null },
+  { tool: "agent.tool", detail: "check_approvals() — 19 live · $1,293 reachable", ms: 890 },
+  { tool: "engine.revise", detail: "re-scored on what came back · health 67", ms: 8 },
 ];
 
-function AgentLoop() {
+/* the agent's own steps read amber, the engine's do not — a decision and a
+   computation should not look alike in a trace that is arguing for agency */
+const toolTone = (t = "") =>
+  t.startsWith("agent.") ? "is-agent" : t.startsWith("rigel.") ? "is-rigel" : "";
+
+/* The replay is driven from JS rather than staggered CSS delays so that the
+   rows build up, hold together, and clear together. On independent CSS cycles
+   only ever one or two are on screen at once and the console reads as empty —
+   the exact impression the strip exists to correct. */
+function useReplay(active) {
+  /* first render matches the server: the whole trace, so there is no layout
+     shift and no-JS still gets the content */
+  const [n, setN] = useState(REPLAY.length);
+
+  useEffect(() => {
+    if (!active) return;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+
+    let t;
+    let i = 0;
+    const tick = () => {
+      setN(i);
+      const atEnd = i >= REPLAY.length;
+      i = atEnd ? 0 : i + 1;
+      t = setTimeout(tick, atEnd ? 3400 : 560);
+    };
+    tick();
+    return () => clearTimeout(t);
+  }, [active]);
+
+  return n;
+}
+
+function ConsoleRow({ step, i, typed }) {
   return (
-    <div className="loop" aria-label="How Rigel works: the engine scores, the agent chooses a tool, the engine re-scores what it finds">
-      <div className="loop-track">
-        {LOOP_STAGES.map((s, i) => (
-          <div className={`loop-stage loop-${s.k}`} key={s.k} style={{ "--i": i }}>
-            <span className="loop-dot" />
-            <div className="loop-body">
-              <span className="loop-label">{s.label}</span>
-              <span className="loop-detail">{s.detail}</span>
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="loop-foot">
-        <span className="loop-delta">
-          85 <span className="loop-arrow">→</span> <em>67</em>
-        </span>
-        <span className="loop-caption">
-          the score moved because the agent went looking, not because a model said so
-        </span>
-        <span className="loop-replay">recorded run · jesse.base.eth</span>
-      </div>
+    <div className={"crow " + (typed ? "crow-type" : "crow-in")}>
+      <span className="crow-n">{String(i + 1).padStart(2, "0")}</span>
+      <span className={"crow-tool " + toolTone(step.tool)}>{step.tool}</span>
+      <span className="crow-detail">{step.detail}</span>
+      <span className={"crow-ms" + (step.status === "fail" ? " is-fail" : "")}>
+        {step.status === "fail" ? "failed" : step.ms ? step.ms + "ms" : "—"}
+      </span>
     </div>
   );
 }
@@ -260,33 +288,119 @@ function agentStats(steps = []) {
   return { decisions, calls };
 }
 
-function AgentSummary({ data }) {
-  const { decisions, calls } = agentStats(data.trace);
-  if (!decisions && !calls.length) return null;
+function AgentConsole({ mode, steps, elapsed, data, target }) {
+  const replay = mode === "replay";
+  const shown = useReplay(replay);
+  const rows = replay ? REPLAY.slice(0, shown) : steps;
+  const { decisions, calls } = agentStats(mode === "done" ? data?.trace : []);
+  const bodyRef = useRef(null);
+
+  /* the replay clock adds up the real per-step timings as the rows land */
+  const replayMs = REPLAY.slice(0, shown).reduce((a, s) => a + (s.ms || 0), 0);
+
+  /* follow the newest row as it streams, the way a terminal does */
+  useEffect(() => {
+    if (replay) return;
+    const el = bodyRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [rows.length, replay]);
 
   const moved =
-    data.baselineScore != null && data.score != null && data.baselineScore !== data.score;
+    mode === "done" &&
+    data?.baselineScore != null &&
+    data?.score != null &&
+    data.baselineScore !== data.score;
+
+  const status =
+    mode === "live" ? "running" : mode === "done" ? "complete" : "replay";
 
   return (
-    <div className="agentsum">
-      <div className="agentsum-head">
-        <span className="agentsum-pip" />
-        the agent chose {calls.length} tool{calls.length === 1 ? "" : "s"} over{" "}
-        {decisions} decision{decisions === 1 ? "" : "s"}
+    <div className="console">
+      <div className="console-head">
+        <span className="console-lights" aria-hidden="true">
+          <i />
+          <i />
+          <i />
+        </span>
+        <span className="console-name">
+          rigel <b>{replay ? "jesse.base.eth" : target || "diagnose"}</b>
+        </span>
+        <span className={"pill " + (mode === "live" ? "is-running" : mode === "done" ? "is-done" : "")}>
+          <span className="pill-dot" />
+          {status}
+        </span>
+        <span style={{ flex: 1 }} />
+        <span className="console-clock">
+          {(replay ? replayMs / 1000 : elapsed / 1000).toFixed(1)}s
+        </span>
       </div>
-      <div className="agentsum-calls">
-        {calls.map((c, i) => (
-          <span className="agentsum-call" key={i} style={{ "--i": i }}>
-            {c}
-          </span>
+
+      <div className="console-body" ref={bodyRef}>
+        {rows.map((s, i) => (
+          <ConsoleRow key={i} step={s} i={i} typed={replay} />
         ))}
+
+        {mode === "live" && (
+          <div className="crow crow-working">
+            <span className="crow-n">{String(rows.length + 1).padStart(2, "0")}</span>
+            <span className="crow-tool is-agent">working</span>
+            <span className="crow-detail">
+              <span className="caret" />
+            </span>
+            <span className="crow-ms">⋯</span>
+          </div>
+        )}
+
+        {replay && (
+          <div className="crow">
+            <span className="crow-n" />
+            <span className="crow-tool">
+              <span className="caret" />
+            </span>
+            <span />
+            <span />
+          </div>
+        )}
       </div>
+
+      {mode === "done" && calls.length > 0 && (
+        <div className="calls">
+          <span className="calls-label">
+            chose {calls.length} tool{calls.length === 1 ? "" : "s"} over {decisions}{" "}
+            decision{decisions === 1 ? "" : "s"}
+          </span>
+          {calls.map((c, i) => (
+            <span className="call" key={i} style={{ "--i": i }}>
+              {c}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {replay && (
+        <div className="console-foot">
+          <span className="delta">
+            health <span className="from">85</span>
+            <span className="arrow">→</span>
+            <span className="to">67</span>
+          </span>
+          <span className="console-caption">
+            the score moved because the agent went looking, not because a model said so
+          </span>
+          <span className="console-tag">recorded run · run your own below</span>
+        </div>
+      )}
+
       {moved && (
-        <div className="agentsum-move">
-          health <span className="from">{data.baselineScore}</span>
-          <span className="loop-arrow">→</span>
-          <span className="to">{data.score}</span>
-          <span className="agentsum-why">
+        <div className="console-foot">
+          <span className="delta">
+            health <span className="from">{data.baselineScore}</span>
+            <span className="arrow">→</span>
+            <span className={"to" + (data.score > data.baselineScore ? " up" : "")}>
+              {data.score}
+            </span>
+          </span>
+          <span className="console-caption">
             {data.score < data.baselineScore
               ? "on evidence the first pass never saw"
               : "the first pass was reading one chain and got it wrong"}
@@ -297,31 +411,52 @@ function AgentSummary({ data }) {
   );
 }
 
-function TraceRows({ steps, pending }) {
+/* ---------------------------------------------------------------- */
+
+function ScoreGauge({ score, grade }) {
+  const R = 54;
+  const C = 2 * Math.PI * R;
+  const color =
+    score == null
+      ? "var(--fg-dim)"
+      : score >= 80
+      ? "var(--ok)"
+      : score >= 60
+      ? "var(--fg)"
+      : score >= 40
+      ? "var(--accent)"
+      : "var(--bad)";
+  const off = score == null ? C : C * (1 - score / 100);
+
   return (
-    <div className="trace">
-      {steps.map((t, i) => (
-        <div className="trace-row trace-in" key={i}>
-          <span className="trace-n">{String(i + 1).padStart(2, "0")}</span>
-          <span>
-            <span className="trace-tool">{t.tool}</span>
-            <span className="trace-detail">{t.detail}</span>
-          </span>
-          <span className="trace-ms">
-            {t.status === "fail" ? "failed" : t.ms ? t.ms + "ms" : "—"}
-          </span>
+    <div>
+      <div className="gauge">
+        <svg viewBox="0 0 140 140" aria-hidden="true">
+          <circle className="gauge-track" cx="70" cy="70" r={R} />
+          <circle
+            className="gauge-arc"
+            cx="70"
+            cy="70"
+            r={R}
+            stroke={color}
+            style={{ "--c": C, "--off": off }}
+          />
+        </svg>
+        <div className="gauge-mid">
+          <div className="gauge-num" style={{ color }}>
+            {score ?? "—"}
+          </div>
+          <div className="gauge-den">{score == null ? "not scored" : "health"}</div>
         </div>
-      ))}
-      {pending && (
-        <div className="trace-row trace-pending">
-          <span className="trace-n">{String(steps.length + 1).padStart(2, "0")}</span>
-          <span className="trace-detail">working</span>
-          <span className="trace-ms">⋯</span>
-        </div>
-      )}
+      </div>
+      <div className="grade" style={{ color }}>
+        {grade}
+      </div>
     </div>
   );
 }
+
+/* ---------------------------------------------------------------- */
 
 const CHAT_SEEDS = [
   "What should I fix first?",
@@ -384,7 +519,10 @@ function Chat({ report }) {
           if (msg.t === "tool") {
             setTools((t) => [
               ...t,
-              msg.args?.chain ? `${msg.name}(${msg.args.chain})` : `${msg.name}()`,
+              /* show whatever argument the tool got, not just `chain` */
+              `${msg.name}(${Object.values(msg.args || {})
+                .filter((v) => typeof v === "string" && v.trim())
+                .join(", ")})`,
             ]);
           } else if (msg.t === "reply") {
             setMessages((m) => [...m, { role: "assistant", content: msg.text }]);
@@ -406,58 +544,67 @@ function Chat({ report }) {
 
   return (
     <div className="chat">
-      {messages.length === 0 && (
-        <p className="chat-intro">
-          Ask about this report. Rigel answers from the engine&rsquo;s numbers, and
-          can go read more chains or your open approvals if the question needs it.
-        </p>
-      )}
+      <div className="chat-body">
+        {messages.length === 0 && !busy && (
+          <p className="chat-intro">
+            Ask about this report. Rigel answers from the engine&rsquo;s numbers, and
+            can go read more chains or your open approvals if the question needs it.
+          </p>
+        )}
 
-      {messages.map((m, i) => (
-        <div className={"msg msg-" + m.role} key={i}>
-          <span className="msg-who">{m.role === "user" ? "You" : "Rigel"}</span>
-          <div className="msg-body">{m.content}</div>
-        </div>
-      ))}
-
-      {busy && (
-        <div className="msg msg-assistant">
-          <span className="msg-who">Rigel</span>
-          <div className="msg-body msg-working">
-            {tools.length ? (
-              <>
-                calling <b>{tools.join(", ")}</b>
-              </>
-            ) : (
-              <span className="scanning">thinking</span>
-            )}
+        {messages.map((m, i) => (
+          <div className={"msg msg-" + m.role} key={i}>
+            <span className="avatar">{m.role === "user" ? "you" : "R"}</span>
+            <div className="msg-body">{m.content}</div>
           </div>
-        </div>
-      )}
+        ))}
 
-      {messages.length === 0 && (
-        <div className="samples chat-seeds">
-          {CHAT_SEEDS.map((s) => (
-            <button key={s} onClick={() => ask(s)} disabled={busy}>
-              {s}
-            </button>
-          ))}
-        </div>
-      )}
+        {busy && (
+          <div className="msg msg-assistant">
+            <span className="avatar">R</span>
+            <div className="msg-body msg-working">
+              {tools.length ? (
+                <>
+                  calling <b>{tools.join(", ")}</b>
+                </>
+              ) : (
+                <span className="dots">
+                  <i />
+                  <i />
+                  <i />
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
 
-      <div className="console chat-console">
-        <label className="field">
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && ask()}
-            placeholder="Ask about this wallet…"
-            aria-label="Ask about this wallet"
-          />
-        </label>
-        <button className="run" onClick={() => ask()} disabled={busy || !input.trim()}>
-          {busy ? "…" : "Ask"}
-        </button>
+      <div className="chat-foot">
+        {messages.length === 0 && (
+          <div className="samples chat-seeds">
+            {CHAT_SEEDS.map((s) => (
+              <button key={s} onClick={() => ask(s)} disabled={busy}>
+                {s}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div className="chat-console">
+          <label className="field">
+            <span className="field-prompt">›</span>
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && ask()}
+              placeholder="Ask about this wallet…"
+              aria-label="Ask about this wallet"
+            />
+          </label>
+          <button className="run" onClick={() => ask()} disabled={busy || !input.trim()}>
+            {busy ? "…" : "Ask"}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -472,12 +619,38 @@ export default function Page() {
   const [error, setError] = useState(null);
   const [data, setData] = useState(null);
   const [live, setLive] = useState([]);
-  const [showTrace, setShowTrace] = useState(true);
+  const [elapsed, setElapsed] = useState(0);
+  const [showTrace, setShowTrace] = useState(false);
+  const inputRef = useRef(null);
+
+  /* A run takes upwards of a minute. A clock that is actually counting is the
+     difference between "it is working" and "it has hung". */
+  useEffect(() => {
+    if (!busy) return;
+    const t0 = Date.now();
+    setElapsed(0);
+    const id = setInterval(() => setElapsed(Date.now() - t0), 100);
+    return () => clearInterval(id);
+  }, [busy]);
+
+  /* ⌘K / ctrl-K / "/" jumps to the address field, the way a console should */
+  useEffect(() => {
+    const onKey = (e) => {
+      const typing = /^(input|textarea|select)$/i.test(e.target?.tagName || "");
+      if ((e.key === "k" && (e.metaKey || e.ctrlKey)) || (e.key === "/" && !typing)) {
+        e.preventDefault();
+        inputRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   async function run(addr) {
     const target = (addr ?? address).trim();
     if (!target) {
       setError("Paste a wallet address to run a diagnosis.");
+      inputRef.current?.focus();
       return;
     }
     setBusy(true);
@@ -532,368 +705,392 @@ export default function Page() {
     }
   }
 
-  const scoreColor =
-    data?.score == null
-      ? "var(--paper-dim)"
-      : data.score >= 80
-      ? "var(--cyan)"
-      : data.score >= 60
-      ? "var(--star)"
-      : data.score >= 40
-      ? "var(--amber)"
-      : "var(--crimson)";
+  function sample(a) {
+    setAddress(a);
+    setChain("base-mainnet");
+    run(a);
+  }
+
+  const mode = busy ? "live" : data ? "done" : "replay";
+  const status = busy ? "running" : error ? "error" : data ? "complete" : "idle";
 
   return (
-    <div className="wrap">
-      <header className="masthead">
-        <div className="brand">
-          <svg className="brand-star" viewBox="0 0 64 64" aria-hidden="true">
-            <path
-              d="M32 8 C34 24, 40 30, 56 32 C40 34, 34 40, 32 56 C30 40, 24 34, 8 32 C24 30, 30 24, 32 8 Z"
-              fill="var(--amber)"
-            />
-          </svg>
-          <span className="brand-mark">Rigel</span>
-          <span className="brand-note">wallet diagnostics</span>
-        </div>
-        <div className="masthead-right">
-          autonomous · picks its own tools · never invents a number
+    <>
+      <header className="topbar">
+        <div className="topbar-in">
+          <div className="brand">
+            <svg className="brand-star" viewBox="0 0 64 64" aria-hidden="true">
+              <path
+                d="M32 8 C34 24, 40 30, 56 32 C40 34, 34 40, 32 56 C30 40, 24 34, 8 32 C24 30, 30 24, 32 8 Z"
+                fill="var(--accent)"
+              />
+            </svg>
+            <span className="brand-mark">Rigel</span>
+            <span className="brand-note">wallet diagnostics</span>
+          </div>
+
+          <span className={"pill is-" + status}>
+            <span className="pill-dot" />
+            agent {status}
+          </span>
+
+          <span className="topbar-spacer" />
+
+          <span className="topbar-links">
+            <a href="https://github.com/Berlin170/Rigel" target="_blank" rel="noreferrer">
+              GitHub
+            </a>
+            <a href="https://orionagents.org/hackathon" target="_blank" rel="noreferrer">
+              Orion
+            </a>
+          </span>
         </div>
       </header>
 
-      <section className="hero">
-        <h1>
-          It decides what to check.
-          <br />
-          <em>Then it goes and looks.</em>
-        </h1>
-        <p>
-          Rigel runs nine deterministic checks on any Base wallet. Then an agent
-          reads that output and picks what the first pass missed — other chains,
-          open approvals — and investigates. Everything it brings back is
-          re-scored by the same engine, so the health score moves on evidence.
-          The model chooses where to look and writes the diagnosis. It never
-          produces a number.
-        </p>
-      </section>
-
-      <AgentLoop />
-
-      <div className="console">
-        <label className="field">
-          <input
-            value={address}
-            onChange={(e) => setAddress(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && !busy && run()}
-            placeholder="0x… wallet address"
-            spellCheck="false"
-            aria-label="Wallet address"
-          />
-        </label>
-        <select value={chain} onChange={(e) => setChain(e.target.value)} aria-label="Chain">
-          {CHAINS.map(([v, l]) => (
-            <option key={v} value={v}>
-              {l}
-            </option>
-          ))}
-        </select>
-        <button className="run" onClick={() => run()} disabled={busy}>
-          {busy ? "Reading" : "Diagnose"}
-        </button>
-      </div>
-
-      {/* Two wallets that fail in different ways, so each button exercises a
-          different tool: the first reads as concentrated until the agent looks
-          at another chain, the second holds enough behind live approvals to be
-          worth draining. */}
-      <div className="samples">
-        <span>try</span>
-        <button
-          onClick={() => {
-            const a = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
-            setAddress(a);
-            setChain("base-mainnet");
-            run(a);
-          }}
-        >
-          vitalik.eth
-        </button>
-        <button
-          onClick={() => {
-            const a = "0x849151d7D0bF1F34b70d5caD5149D28CC2308bf1";
-            setAddress(a);
-            setChain("base-mainnet");
-            run(a);
-          }}
-        >
-          jesse.base.eth
-        </button>
-      </div>
-
-      {error && <div className="notice bad">{error}</div>}
-
-      {!data && !busy && (
-        <div className="preview">
-          <div className="sec">
-            <h2>What Rigel checks</h2>
-            <span className="line" />
-          </div>
-          <div className="preview-grid">
-            {CHECKS.map(([name, desc]) => (
-              <div className="preview-item" key={name}>
-                <div className="pi-name">{name}</div>
-                <div className="pi-desc">{desc}</div>
-              </div>
-            ))}
-          </div>
-          <p className="preview-foot">
-            Every one of these is computed by a deterministic engine before the
-            model sees anything. The model writes the diagnosis — it never
-            produces a number.
+      <div className="shell">
+        <section className="hero">
+          <h1>
+            It decides what to check. <em>Then it goes and looks.</em>
+          </h1>
+          <p>
+            Nine deterministic checks run on any wallet. Then an agent reads that
+            output, picks what the first pass missed — other chains, open approvals
+            — and investigates. Everything it brings back is re-scored by the same
+            engine, so <b>the health score moves on evidence</b>.
           </p>
-        </div>
-      )}
 
-      {busy && (
-        <div className="loading-wrap">
-          <div className="sec">
-            <h2>Agent trace</h2>
-            <span className="line" />
-            <span className="scanning">live</span>
-          </div>
-          <TraceRows steps={live} pending />
-          <div className="skeleton sk-chart" />
-          <div className="skeleton sk-verdict" />
-        </div>
-      )}
-
-      {data && (
-        <>
-          <div className="sec">
-            <h2>What the agent did</h2>
-            <span className="line" />
-          </div>
-          <AgentSummary data={data} />
-
-          <div className="sec">
-            <h2>The chart</h2>
-            <span className="line" />
-          </div>
-          <Constellation
-            key={data.address + data.chain}
-            holdings={data.holdings}
-            address={data.address}
-          />
-
-          <div className="sec">
-            <h2>Verdict</h2>
-            <span className="line" />
-          </div>
-          <div className="verdict">
-            <div className="score-block">
-              <div className="score-num" style={{ color: scoreColor }}>
-                {data.score ?? "—"}
-              </div>
-              <div className="score-den">
-                {data.score == null ? "not scored" : "health score"}
-              </div>
-              <div className="grade" style={{ color: scoreColor }}>
-                {data.grade}
-              </div>
+          <div className="hero-facts">
+            <div className="hero-fact">
+              <div className="n">9</div>
+              <div className="l">deterministic checks</div>
             </div>
-            <div className="stat-grid">
-              <div className="stat">
-                <div className="k">
-                  {data.metrics?.chainsScanned > 1 ? "Value found" : "Total value"}
-                </div>
-                <div className="v">
-                  {usd(data.metrics?.combinedTotal ?? data.total)}
-                </div>
-                {data.metrics?.chainsScanned > 1 && (
-                  <div className="stat-sub">
-                    across {data.metrics.chainsScanned} chains
-                  </div>
-                )}
-              </div>
-              <div className="stat">
-                <div className="k">Positions</div>
-                <div className="v">{data.metrics?.positions ?? 0}</div>
-              </div>
-              <div className="stat">
-                <div className="k">Top weight</div>
-                <div className="v">{pct(data.metrics?.topShare)}</div>
-              </div>
-              <div className="stat">
-                <div className="k">In stables</div>
-                <div className="v">{pct(data.metrics?.stableShare)}</div>
-              </div>
-              <div className="stat">
-                <div className="k">30d change</div>
-                <div className="v">
-                  {data.metrics?.change == null
-                    ? "—"
-                    : (data.metrics.change > 0 ? "+" : "") + pct(data.metrics.change)}
-                </div>
-              </div>
-              <div className="stat">
-                <div className="k">Off peak</div>
-                <div className="v">{pct(data.metrics?.drawdown)}</div>
-              </div>
+            <div className="hero-fact">
+              <div className="n">6</div>
+              <div className="l">chains reachable</div>
+            </div>
+            <div className="hero-fact">
+              <div className="n">0</div>
+              <div className="l">numbers written by the model</div>
             </div>
           </div>
+        </section>
 
-          {data.brief && (
-            <>
-              <div className="sec">
-                <h2>Diagnosis</h2>
-                <span className="line" />
-              </div>
-              <div className="brief">
-                {data.brief.split(/\n\n+/).map((p, i) => (
-                  <p key={i}>{p}</p>
-                ))}
-                <div className="byline">
-                  Written from the engine output above. No figure in this text was
-                  produced by the model.
-                </div>
-              </div>
-            </>
-          )}
+        <AgentConsole
+          mode={mode}
+          steps={mode === "live" ? live : data?.trace || []}
+          elapsed={elapsed}
+          data={data}
+          target={data?.address ? data.address.slice(0, 10) + "…" : address.slice(0, 10)}
+        />
 
-          {!data.brief && data.briefReason === "no-key" && (
-            <div className="notice">
-              The written diagnosis is off — no LLM_API_KEY is set on the server. The
-              risk engine below runs without it.
-            </div>
-          )}
-
-          {!data.brief && data.briefReason && data.briefReason !== "no-key" && (
-            <div className="notice">
-              The written diagnosis did not come back ({data.briefReason}). Engine
-              findings below are unaffected.
-            </div>
-          )}
-
-          <div className="sec">
-            <h2>Ask Rigel</h2>
-            <span className="line" />
-            <span className="sec-note">decentralized inference</span>
-          </div>
-          <Chat key={data.address + data.chain} report={data} />
-
-          <div className="sec">
-            <h2>Findings</h2>
-            <span className="line" />
-          </div>
-          <div>
-            {data.findings.map((f) => (
-              <div key={f.id} className={"finding " + f.severity}>
-                <div className="finding-head">
-                  <h3>{f.title}</h3>
-                  <span className={"sev " + f.severity}>{f.severity}</span>
-                </div>
-                <p>{f.detail}</p>
-                {f.evidence && <div className="evidence">{f.evidence}</div>}
-              </div>
+        <div className="cmd">
+          <label className="field">
+            <span className="field-prompt">›</span>
+            <input
+              ref={inputRef}
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && !busy && run()}
+              placeholder="0x… wallet address or ENS name"
+              spellCheck="false"
+              aria-label="Wallet address"
+            />
+            <span className="kbd hide-sm">⌘K</span>
+          </label>
+          <select value={chain} onChange={(e) => setChain(e.target.value)} aria-label="Chain">
+            {CHAINS.map(([v, l]) => (
+              <option key={v} value={v}>
+                {l}
+              </option>
             ))}
-          </div>
+          </select>
+          <button className="run" onClick={() => run()} disabled={busy}>
+            {busy && <span className="spin" />}
+            {busy ? "Reading" : "Diagnose"}
+          </button>
+        </div>
 
-          {data.holdings.length > 0 && (
-            <>
-              <div className="sec">
-                <h2>Holdings</h2>
-                <span className="line" />
+        {/* Two wallets that fail in different ways, so each button exercises a
+            different tool: the first reads as concentrated until the agent looks
+            at another chain, the second holds enough behind live approvals to be
+            worth draining. */}
+        <div className="samples">
+          <span>try</span>
+          <button
+            disabled={busy}
+            onClick={() => sample("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045")}
+          >
+            vitalik.eth
+          </button>
+          <button
+            disabled={busy}
+            onClick={() => sample("0x849151d7D0bF1F34b70d5caD5149D28CC2308bf1")}
+          >
+            jesse.base.eth
+          </button>
+        </div>
+
+        {error && <div className="notice bad">{error}</div>}
+
+        {!data && !busy && (
+          <>
+            <div className="sec">
+              <h2>What it checks</h2>
+              <span className="line" />
+              <span className="sec-note">before the model sees anything</span>
+            </div>
+            <div className="checks">
+              {CHECKS.map(([name, desc], i) => (
+                <div className="check" key={name}>
+                  <span className="check-n">{String(i + 1).padStart(2, "0")}</span>
+                  <div className="check-name">{name}</div>
+                  <div className="check-desc">{desc}</div>
+                </div>
+              ))}
+            </div>
+            <p className="preview-foot">
+              Every one of these is computed by a deterministic engine. The model
+              chooses where to look next and writes the diagnosis — it never
+              produces a number.
+            </p>
+          </>
+        )}
+
+        {busy && (
+          <>
+            <div className="skeleton sk-chart" />
+            <div className="skeleton sk-verdict" />
+          </>
+        )}
+
+        {data && (
+          <>
+            <div className="sec">
+              <h2>Verdict</h2>
+              <span className="line" />
+              <span className="sec-note">{chainLabel(data.chain || chain)}</span>
+            </div>
+            <div className="verdict">
+              <ScoreGauge score={data.score} grade={data.grade} />
+              <div className="stat-grid">
+                <div className="stat">
+                  <div className="k">
+                    {data.metrics?.chainsScanned > 1 ? "Value found" : "Total value"}
+                  </div>
+                  <div className="v">{usd(data.metrics?.combinedTotal ?? data.total)}</div>
+                  {data.metrics?.chainsScanned > 1 && (
+                    <div className="stat-sub">across {data.metrics.chainsScanned} chains</div>
+                  )}
+                </div>
+                <div className="stat">
+                  <div className="k">Positions</div>
+                  <div className="v">{data.metrics?.positions ?? 0}</div>
+                </div>
+                <div className="stat">
+                  <div className="k">Top weight</div>
+                  <div className="v">{pct(data.metrics?.topShare)}</div>
+                </div>
+                <div className="stat">
+                  <div className="k">In stables</div>
+                  <div className="v">{pct(data.metrics?.stableShare)}</div>
+                </div>
+                <div className="stat">
+                  <div className="k">30d change</div>
+                  <div className="v">
+                    {data.metrics?.change == null
+                      ? "—"
+                      : (data.metrics.change > 0 ? "+" : "") + pct(data.metrics.change)}
+                  </div>
+                </div>
+                <div className="stat">
+                  <div className="k">Off peak</div>
+                  <div className="v">{pct(data.metrics?.drawdown)}</div>
+                </div>
               </div>
-              <table className="tbl">
-                <thead>
-                  <tr>
-                    <th>Token</th>
-                    <th className="hide-sm">Units</th>
-                    <th className="num">Value</th>
-                    <th className="num">Share</th>
-                    <th className="hide-sm" style={{ width: 160 }} />
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.holdings.map((h) => (
-                    <tr key={h.symbol + h.value}>
-                      <td>
-                        <span className="tok">
-                          {h.logo ? (
-                            <img
-                              className="tok-icon"
-                              src={h.logo}
-                              alt=""
-                              loading="lazy"
-                              onError={(e) => {
-                                e.currentTarget.style.visibility = "hidden";
-                              }}
-                            />
-                          ) : (
-                            <span className="tok-icon tok-fallback">
-                              {h.symbol.slice(0, 1)}
-                            </span>
-                          )}
-                          {h.symbol}
-                          <span style={{ color: "var(--paper-dim)", marginLeft: 4 }}>
-                            {h.name.slice(0, 24)}
-                          </span>
-                        </span>
-                      </td>
-                      <td className="hide-sm" style={{ color: "var(--paper-dim)" }}>
-                        {h.units < 1 ? h.units.toFixed(4) : h.units.toLocaleString("en-US", { maximumFractionDigits: 2 })}
-                      </td>
-                      <td className="num">{usd(h.value)}</td>
-                      <td className="num">{pct(h.share)}</td>
-                      <td className="hide-sm">
-                        <div
-                          className="bar"
-                          style={{
-                            width: Math.max(2, h.share * 100) + "%",
-                            background: h.isStable
-                              ? "var(--cyan)"
-                              : h.share >= 0.4
-                              ? "var(--amber)"
-                              : "var(--rule)",
-                          }}
-                        />
-                      </td>
-                    </tr>
+            </div>
+
+            <div className="sec">
+              <h2>The chart</h2>
+              <span className="line" />
+              <span className="sec-note">size = share of value</span>
+            </div>
+            <Constellation
+              key={data.address + data.chain}
+              holdings={data.holdings}
+              address={data.address}
+            />
+
+            {data.brief && (
+              <>
+                <div className="sec">
+                  <h2>Diagnosis</h2>
+                  <span className="line" />
+                </div>
+                <div className="brief">
+                  {data.brief.split(/\n\n+/).map((p, i) => (
+                    <p key={i}>{p}</p>
                   ))}
-                </tbody>
-              </table>
-            </>
-          )}
+                  <div className="byline">
+                    Written from the engine output above. No figure in this text was
+                    produced by the model.
+                  </div>
+                </div>
+              </>
+            )}
 
-          <div className="sec">
-            <h2>Agent trace</h2>
-            <span className="line" />
-            <button className="ghost" onClick={() => setShowTrace((v) => !v)}>
-              {showTrace ? "Hide" : "Show"}
-            </button>
-          </div>
-          {showTrace && <TraceRows steps={data.trace} />}
-        </>
-      )}
+            {!data.brief && data.briefReason === "no-key" && (
+              <div className="notice">
+                The written diagnosis is off — no LLM_API_KEY is set on the server. The
+                risk engine below runs without it.
+              </div>
+            )}
 
-      <footer className="foot">
-        <span>Rigel · not financial advice, always DYOR</span>
-        <span className="foot-links">
-          <a href="https://github.com/Berlin170/Rigel" target="_blank" rel="noreferrer">
-            GitHub
-          </a>
-          <a href="https://x.com/BerlinBuildWeb3" target="_blank" rel="noreferrer">
-            X
-          </a>
-          <a href="https://t.me/Berlin926" target="_blank" rel="noreferrer">
-            Telegram
-          </a>
-          <span className="foot-dim">Discord berlin170</span>
-          <a href="https://orionagents.org/hackathon" target="_blank" rel="noreferrer">
-            Orion Builder Hackathon
-          </a>
-        </span>
-      </footer>
-    </div>
+            {!data.brief && data.briefReason && data.briefReason !== "no-key" && (
+              <div className="notice">
+                The written diagnosis did not come back ({data.briefReason}). Engine
+                findings below are unaffected.
+              </div>
+            )}
+
+            <div className="sec">
+              <h2>Ask Rigel</h2>
+              <span className="line" />
+              <span className="sec-note">decentralized inference</span>
+            </div>
+            <Chat key={data.address + data.chain} report={data} />
+
+            <div className="sec">
+              <h2>Findings</h2>
+              <span className="line" />
+              <span className="sec-note">{data.findings.length} raised</span>
+            </div>
+            <div>
+              {data.findings.map((f) => (
+                <div key={f.id} className={"finding " + f.severity}>
+                  <div className="finding-head">
+                    <h3>{f.title}</h3>
+                    <span className={"badge " + f.severity}>{f.severity}</span>
+                  </div>
+                  <p>{f.detail}</p>
+                  {f.evidence && <div className="evidence">{f.evidence}</div>}
+                </div>
+              ))}
+            </div>
+
+            {data.holdings.length > 0 && (
+              <>
+                <div className="sec">
+                  <h2>Holdings</h2>
+                  <span className="line" />
+                  <span className="sec-note">{data.holdings.length} priced</span>
+                </div>
+                <div className="tbl-wrap">
+                  <table className="tbl">
+                    <thead>
+                      <tr>
+                        <th>Token</th>
+                        <th className="hide-sm">Units</th>
+                        <th className="num">Value</th>
+                        <th className="num">Share</th>
+                        <th className="hide-sm" style={{ width: 150 }} />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.holdings.map((h) => (
+                        <tr key={h.symbol + h.value}>
+                          <td>
+                            <span className="tok">
+                              {/* the letter is always rendered and the logo
+                                  covers it once it loads, so a slow or broken
+                                  image degrades to an initial, not a gap */}
+                              <span className="tok-icon tok-fallback">
+                                {h.symbol.slice(0, 1)}
+                                {h.logo && (
+                                  <img
+                                    className="tok-img"
+                                    src={h.logo}
+                                    alt=""
+                                    loading="lazy"
+                                    onError={(e) => {
+                                      e.currentTarget.style.display = "none";
+                                    }}
+                                  />
+                                )}
+                              </span>
+                              {h.symbol}
+                              <span className="tok-name">{h.name.slice(0, 24)}</span>
+                            </span>
+                          </td>
+                          <td className="hide-sm">
+                            {h.units < 1
+                              ? h.units.toFixed(4)
+                              : h.units.toLocaleString("en-US", { maximumFractionDigits: 2 })}
+                          </td>
+                          <td className="num">{usd(h.value)}</td>
+                          <td className="num">{pct(h.share)}</td>
+                          <td className="hide-sm">
+                            <div className="bar-track">
+                              <div
+                                className="bar"
+                                style={{
+                                  width: Math.max(2, h.share * 100) + "%",
+                                  /* the track is --border, so the fill has to
+                                     clear it or the bar reads as empty */
+                                  background: h.isStable
+                                    ? "var(--ok)"
+                                    : h.share >= 0.4
+                                    ? "var(--accent)"
+                                    : "var(--fg-dim)",
+                                }}
+                              />
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+
+            <div className="sec">
+              <h2>Full trace</h2>
+              <span className="line" />
+              <button className="ghost" onClick={() => setShowTrace((v) => !v)}>
+                {showTrace ? "Hide" : `Show ${data.trace.length} steps`}
+              </button>
+            </div>
+            {showTrace && (
+              <div className="console">
+                <div className="console-body is-full">
+                  {data.trace.map((s, i) => (
+                    <ConsoleRow key={i} step={s} i={i} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        <footer className="foot">
+          <span>Rigel · not financial advice, always DYOR</span>
+          <span className="foot-links">
+            <a href="https://github.com/Berlin170/Rigel" target="_blank" rel="noreferrer">
+              GitHub
+            </a>
+            <a href="https://x.com/BerlinBuildWeb3" target="_blank" rel="noreferrer">
+              X
+            </a>
+            <a href="https://t.me/Berlin926" target="_blank" rel="noreferrer">
+              Telegram
+            </a>
+            <span>Discord berlin170</span>
+            <a href="https://orionagents.org/hackathon" target="_blank" rel="noreferrer">
+              Orion Builder Hackathon
+            </a>
+          </span>
+        </footer>
+      </div>
+    </>
   );
 }
