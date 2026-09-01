@@ -592,3 +592,333 @@ export const TOOL_IMPL = {
   check_approvals: runCheckApprovals,
   inspect_token: runInspectToken,
 };
+
+/* ------------------------------------------------------------------ */
+/* streaming inference                                                 */
+/* ------------------------------------------------------------------ */
+
+/* Both providers speak SSE. Read it line by line and hand each `data:`
+   payload to the caller; the frame boundaries mean nothing to us. */
+async function readSse(res, onPayload) {
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      const s = line.trim();
+      if (!s.startsWith("data:")) continue;
+      const payload = s.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      onPayload(payload);
+    }
+  }
+}
+
+/* Kimi splits reasoning out into `delta.reasoning` when streaming, but it has
+   also been seen inlining a <think> block in `content`. Emit only the part of
+   the content that is genuinely the answer, and never more than once. */
+function answerSoFar(content) {
+  if (!content.includes("<think")) return content;
+  const close = content.lastIndexOf("</think>");
+  return close === -1 ? "" : content.slice(close + 8);
+}
+
+/* A caller's abort (the hedge losing) and our own deadline both have to reach
+   the same fetch, so fold the outer signal into the local controller. */
+function linkAbort(signal, timeoutMs) {
+  const ctl = new AbortController();
+  const onAbort = () => ctl.abort();
+  if (signal) {
+    if (signal.aborted) ctl.abort();
+    else signal.addEventListener("abort", onAbort);
+  }
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  return {
+    signal: ctl.signal,
+    release() {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener("abort", onAbort);
+    },
+  };
+}
+
+/* Streams the turn and still returns the finished message in OpenAI shape, so
+   the tool loop above is unchanged — it just gets to show its work first. */
+export async function gonkaChatStream(
+  messages,
+  tools,
+  { maxTokens = 2000, timeoutMs = 45000, signal } = {},
+  onDelta = () => {}
+) {
+  const base = (process.env.GONKA_BASE_URL || "").replace(/\/$/, "");
+  const link = linkAbort(signal, timeoutMs);
+
+  try {
+    const res = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      signal: link.signal,
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${process.env.GONKA_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: process.env.GONKA_MODEL || "moonshotai/Kimi-K2.6",
+        messages,
+        ...(tools ? { tools, tool_choice: "auto" } : {}),
+        max_tokens: maxTokens,
+        stream: true,
+      }),
+    });
+
+    if (res.status === 504 || res.status === 524) {
+      throw new Error("the inference node timed out");
+    }
+    if (!res.ok) throw new Error(`inference ${res.status}`);
+
+    let content = "";
+    let emitted = 0;
+    const calls = new Map();
+
+    await readSse(res, (payload) => {
+      let json;
+      try {
+        json = JSON.parse(payload);
+      } catch {
+        return;
+      }
+      const delta = json.choices?.[0]?.delta;
+      if (!delta) return;
+
+      if (delta.reasoning) onDelta({ type: "think", text: delta.reasoning });
+
+      if (delta.content) {
+        content += delta.content;
+        const answer = answerSoFar(content);
+        if (answer.length > emitted) {
+          onDelta({ type: "text", text: answer.slice(emitted) });
+          emitted = answer.length;
+        }
+      }
+
+      for (const tc of delta.tool_calls || []) {
+        const i = tc.index ?? 0;
+        const cur = calls.get(i) || {
+          id: tc.id,
+          type: "function",
+          function: { name: "", arguments: "" },
+        };
+        if (tc.id) cur.id = tc.id;
+        if (tc.function?.name) cur.function.name = tc.function.name;
+        if (tc.function?.arguments) cur.function.arguments += tc.function.arguments;
+        calls.set(i, cur);
+        onDelta({ type: "tool_signal" });
+      }
+    });
+
+    const tool_calls = [...calls.values()].filter((c) => c.function.name);
+    return {
+      role: "assistant",
+      content,
+      ...(tool_calls.length ? { tool_calls } : {}),
+    };
+  } catch (err) {
+    if (err?.name === "AbortError") throw new Error("the inference node timed out");
+    throw err;
+  } finally {
+    link.release();
+  }
+}
+
+/* Same contract against Anthropic's event stream: text arrives as text_delta,
+   tool arguments as input_json_delta fragments against the open block. */
+export async function claudeChatStream(
+  messages,
+  tools,
+  { maxTokens = 2000, timeoutMs = 45000, signal } = {},
+  onDelta = () => {}
+) {
+  const base = (process.env.LLM_BASE_URL || "https://api.anthropic.com").replace(/\/$/, "");
+  const req = toAnthropic(messages, tools);
+  const link = linkAbort(signal, timeoutMs);
+
+  try {
+    const res = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      signal: link.signal,
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": process.env.LLM_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: process.env.LLM_MODEL || "claude-sonnet-4-6",
+        max_tokens: maxTokens,
+        ...(req.system ? { system: req.system } : {}),
+        ...(req.tools?.length ? { tools: req.tools } : {}),
+        messages: req.messages,
+        stream: true,
+      }),
+    });
+
+    if (!res.ok) throw new Error(`fallback inference ${res.status}`);
+
+    let text = "";
+    const blocks = new Map();
+
+    await readSse(res, (payload) => {
+      let json;
+      try {
+        json = JSON.parse(payload);
+      } catch {
+        return;
+      }
+
+      if (json.type === "content_block_start") {
+        const b = json.content_block || {};
+        if (b.type === "tool_use") {
+          blocks.set(json.index, { id: b.id, name: b.name, args: "" });
+          onDelta({ type: "tool_signal" });
+        }
+        return;
+      }
+
+      if (json.type === "content_block_delta") {
+        const d = json.delta || {};
+        if (d.type === "text_delta" && d.text) {
+          text += d.text;
+          onDelta({ type: "text", text: d.text });
+        } else if (d.type === "thinking_delta" && d.thinking) {
+          onDelta({ type: "think", text: d.thinking });
+        } else if (d.type === "input_json_delta") {
+          const blk = blocks.get(json.index);
+          if (blk) blk.args += d.partial_json || "";
+        }
+      }
+    });
+
+    const tool_calls = [...blocks.values()].map((b) => ({
+      id: b.id,
+      type: "function",
+      function: { name: b.name, arguments: b.args || "{}" },
+    }));
+
+    return {
+      role: "assistant",
+      content: text.trim(),
+      ...(tool_calls.length ? { tool_calls } : {}),
+    };
+  } catch (err) {
+    if (err?.name === "AbortError") throw new Error("fallback inference timed out");
+    throw err;
+  } finally {
+    link.release();
+  }
+}
+
+/* Decentralized inference is the point, so Gonka always gets first run — but
+   its time to first token measured 3s, 9s and 24s on three consecutive calls,
+   and once 98s before a 429. Waiting out that tail is what made the chat feel
+   broken. So: start Gonka, and if it has not said anything by CHAT_HEDGE_MS,
+   start Claude alongside it and let the first one to actually produce output
+   win. 4.5s is deliberate: a healthy Gonka turn writes its first word at ~3.2s,
+   and Claude needs ~1.1s of its own, so Gonka still takes any turn it can
+   answer inside ~5.5s while the ceiling drops from 98s to about six. The loser is aborted mid-stream. Gonka still answers whenever it is
+   healthy, and the trace names whoever really spoke. */
+export async function agentChatStream(messages, tools, opts = {}, onDelta = () => {}) {
+  const hedgeMs = Number(process.env.CHAT_HEDGE_MS || 4500);
+  const hasGonka = gonkaConfigured();
+  const hasClaude = claudeConfigured();
+
+  if (!hasGonka && !hasClaude) throw new Error("no inference provider configured");
+
+  if (!hasGonka) {
+    return { message: await claudeChatStream(messages, tools, opts, onDelta), provider: "claude" };
+  }
+  if (!hasClaude) {
+    return { message: await gonkaChatStream(messages, tools, opts, onDelta), provider: "gonka" };
+  }
+
+  let winner = null;
+  const ctl = { gonka: new AbortController(), claude: new AbortController() };
+
+  /* First real output wins and silences the other side. Reasoning does not
+     count — Kimi can reason for twenty seconds and still say nothing. */
+  const claim = (who) => {
+    if (winner) return winner === who;
+    winner = who;
+    ctl[who === "gonka" ? "claude" : "gonka"].abort();
+    return true;
+  };
+
+  const forward = (who) => (ev) => {
+    if (ev.type === "think") {
+      if (!winner || winner === who) onDelta(ev);
+      return;
+    }
+    if (ev.type === "tool_signal") {
+      claim(who);
+      return;
+    }
+    if (claim(who)) onDelta(ev);
+  };
+
+  const usable = (m) => Boolean(m && (m.tool_calls?.length || String(m.content || "").trim()));
+
+  const run = async (who, fn) => {
+    const message = await fn(messages, tools, { ...opts, signal: ctl[who].signal }, forward(who));
+    if (!usable(message)) throw new Error(`${who} returned nothing`);
+    if (!claim(who)) return null;
+    return { message, provider: who };
+  };
+
+  const gonkaP = run("gonka", gonkaChatStream).then(
+    (r) => r,
+    (failed) => ({ failed })
+  );
+
+  /* Hedge on the clock, but jump early if Gonka has already settled either way */
+  const hedge = new Promise((resolve) => {
+    const t = setTimeout(resolve, hedgeMs);
+    gonkaP.then(() => {
+      clearTimeout(t);
+      resolve();
+    });
+  });
+
+  const claudeP = hedge
+    .then(() => (winner === "gonka" ? null : run("claude", claudeChatStream)))
+    .then(
+      (r) => r,
+      (failed) => ({ failed })
+    );
+
+  const [g, c] = await Promise.all([gonkaP, claudeP]);
+
+  const win = [g, c].find((r) => r && r.message);
+  if (win) {
+    return {
+      ...win,
+      degradedFrom:
+        win.provider === "claude" ? g?.failed?.message || "the node was slower" : null,
+    };
+  }
+
+  /* Gonka claimed the turn and then died, so Claude was waved off before it
+     ever ran. Give it the turn properly rather than failing the message. */
+  if (!c) {
+    onDelta({ type: "reset" });
+    const message = await claudeChatStream(messages, tools, { ...opts }, onDelta);
+    if (usable(message)) {
+      return { message, provider: "claude", degradedFrom: g?.failed?.message || null };
+    }
+  }
+
+  throw g?.failed || c?.failed || new Error("no answer came back");
+}

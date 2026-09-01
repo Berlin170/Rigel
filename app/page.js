@@ -469,6 +469,16 @@ function Chat({ report }) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [tools, setTools] = useState([]);
+  /* the answer as it arrives, and Kimi's reasoning while there is no answer yet */
+  const [live, setLive] = useState("");
+  const [think, setThink] = useState("");
+  const tailRef = useRef(null);
+
+  /* "nearest" scrolls only when the bubble has actually left the viewport, so
+     the answer stays visible as it streams without yanking the page around. */
+  useEffect(() => {
+    if (busy) tailRef.current?.scrollIntoView({ block: "nearest" });
+  }, [live, think, busy]);
 
   async function ask(text) {
     const q = (text ?? input).trim();
@@ -479,6 +489,8 @@ function Chat({ report }) {
     setInput("");
     setBusy(true);
     setTools([]);
+    setLive("");
+    setThink("");
 
     try {
       const res = await fetch("/api/chat", {
@@ -524,7 +536,19 @@ function Chat({ report }) {
                 .filter((v) => typeof v === "string" && v.trim())
                 .join(", ")})`,
             ]);
+          } else if (msg.t === "think") {
+            setThink((s) => (s + msg.text).slice(-400));
+          } else if (msg.t === "delta") {
+            /* the answer supersedes the reasoning that led to it */
+            setThink("");
+            setTools([]);
+            setLive((s) => s + msg.text);
+          } else if (msg.t === "reset") {
+            setLive("");
+            setThink("");
           } else if (msg.t === "reply") {
+            setLive("");
+            setThink("");
             setMessages((m) => [...m, { role: "assistant", content: msg.text }]);
           } else if (msg.t === "error") {
             setMessages((m) => [...m, { role: "assistant", content: msg.error }]);
@@ -539,6 +563,8 @@ function Chat({ report }) {
     } finally {
       setBusy(false);
       setTools([]);
+      setLive("");
+      setThink("");
     }
   }
 
@@ -562,21 +588,32 @@ function Chat({ report }) {
         {busy && (
           <div className="msg msg-assistant">
             <span className="avatar">R</span>
-            <div className="msg-body msg-working">
-              {tools.length ? (
-                <>
-                  calling <b>{tools.join(", ")}</b>
-                </>
-              ) : (
-                <span className="dots">
-                  <i />
-                  <i />
-                  <i />
-                </span>
-              )}
-            </div>
+            {live ? (
+              <div className="msg-body">
+                {live}
+                <span className="caret" />
+              </div>
+            ) : (
+              <div className="msg-body msg-working">
+                {tools.length ? (
+                  <>
+                    calling <b>{tools.join(", ")}</b>
+                  </>
+                ) : think ? (
+                  <span className="thinking">{think}</span>
+                ) : (
+                  <span className="dots">
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         )}
+
+        <div ref={tailRef} />
       </div>
 
       <div className="chat-foot">

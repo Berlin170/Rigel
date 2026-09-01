@@ -1,7 +1,7 @@
 import {
   AGENT_TOOLS,
   TOOL_IMPL,
-  agentChat,
+  agentChatStream,
   gonkaConfigured,
   claudeConfigured,
   stripThink,
@@ -37,18 +37,20 @@ const SYSTEM = [
 
 /* Kimi occasionally closes its reasoning block and stops without writing an
    answer. One nudge recovers it; the alternative is a false "I don't know". */
-async function answerOrNudge(messages) {
-  const { message, provider } = await agentChat(messages, AGENT_TOOLS, { maxTokens: 3000 });
-  if (!message) return { message: null, provider };
-  if (message.tool_calls?.length || stripThink(message.content)) return { message, provider };
+async function answerOrNudge(messages, onDelta) {
+  const first = await agentChatStream(messages, AGENT_TOOLS, { maxTokens: 3000 }, onDelta);
+  const { message } = first;
+  if (!message) return first;
+  if (message.tool_calls?.length || stripThink(message.content)) return first;
 
   messages.push({ role: "assistant", content: "" });
   messages.push({
     role: "user",
     content: "Answer the question directly now, in plain sentences.",
   });
-  const retry = await agentChat(messages, null, { maxTokens: 1200 });
-  return { message: retry.message, provider: retry.provider };
+  /* whatever half-thought reached the client is not the answer */
+  onDelta({ type: "reset" });
+  return agentChatStream(messages, null, { maxTokens: 1200 }, onDelta);
 }
 
 export async function POST(req) {
@@ -150,8 +152,24 @@ export async function POST(req) {
       };
 
       try {
+        /* The answer is streamed for speed and then re-sent whole: the deltas
+           are what the reader watches, `reply` is the authoritative text after
+           the think block and the escaped dollars have been cleaned off. */
+        let streaming = false;
+        const onDelta = (ev) => {
+          if (ev.type === "think") {
+            send({ t: "think", text: ev.text });
+          } else if (ev.type === "text") {
+            streaming = true;
+            send({ t: "delta", text: ev.text });
+          } else if (ev.type === "reset") {
+            streaming = false;
+            send({ t: "reset" });
+          }
+        };
+
         for (let step = 0; step < MAX_STEPS; step++) {
-          const { message: msg, provider } = await answerOrNudge(messages);
+          const { message: msg, provider } = await answerOrNudge(messages, onDelta);
           if (!msg) break;
           if (step === 0) send({ t: "provider", provider });
 
@@ -167,6 +185,12 @@ export async function POST(req) {
           if (!calls.length) {
             send({ t: "reply", text: text || "I do not have the data to answer that." });
             break;
+          }
+
+          /* anything written before a tool call is a preamble, not the answer */
+          if (streaming) {
+            streaming = false;
+            send({ t: "reset" });
           }
 
           await Promise.all(
