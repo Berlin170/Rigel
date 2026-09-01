@@ -37,8 +37,13 @@ const SYSTEM = [
 
 /* Kimi occasionally closes its reasoning block and stops without writing an
    answer. One nudge recovers it; the alternative is a false "I don't know". */
-async function answerOrNudge(messages, onDelta) {
-  const first = await agentChatStream(messages, AGENT_TOOLS, { maxTokens: 3000 }, onDelta);
+async function answerOrNudge(messages, onDelta, allowTools) {
+  const first = await agentChatStream(
+    messages,
+    allowTools ? AGENT_TOOLS : null,
+    { maxTokens: 3000 },
+    onDelta
+  );
   const { message } = first;
   if (!message) return first;
   if (message.tool_calls?.length || stripThink(message.content)) return first;
@@ -169,7 +174,14 @@ export async function POST(req) {
         };
 
         for (let step = 0; step < MAX_STEPS; step++) {
-          const { message: msg, provider } = await answerOrNudge(messages, onDelta);
+          /* The last step is asked without tools, so it has to write prose.
+             Otherwise a turn that spent every step on lookups would fall out of
+             this loop having never said anything to the reader. */
+          const { message: msg, provider } = await answerOrNudge(
+            messages,
+            onDelta,
+            step < MAX_STEPS - 1
+          );
           if (!msg) break;
           if (step === 0) send({ t: "provider", provider });
 

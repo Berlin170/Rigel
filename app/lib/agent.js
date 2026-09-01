@@ -292,6 +292,13 @@ export function claudeConfigured() {
   return Boolean(process.env.LLM_API_KEY);
 }
 
+/* Kimi names its tool calls "functions.scan_chain:0". Anthropic validates the
+   id against ^[a-zA-Z0-9_-]+$ and 400s on the dot and the colon, which killed
+   every turn where the node made a tool call and the fallback had to finish it.
+   The id only has to be consistent within the one request, so rewrite it on the
+   way over — both on the call and on the result that answers it. */
+const safeToolId = (id) => String(id || "call").replace(/[^a-zA-Z0-9_-]/g, "_") || "call";
+
 /* Messages are held in OpenAI shape because that is what the broker speaks.
    Anthropic wants system hoisted out, tool calls as content blocks, and tool
    results as user turns — so translate on the way in and back on the way out. */
@@ -309,7 +316,7 @@ function toAnthropic(messages, tools) {
       const prev = out[out.length - 1];
       const block = {
         type: "tool_result",
-        tool_use_id: m.tool_call_id,
+        tool_use_id: safeToolId(m.tool_call_id),
         content: String(m.content ?? ""),
       };
       /* consecutive tool results belong in one user turn */
@@ -328,7 +335,7 @@ function toAnthropic(messages, tools) {
         } catch {
           /* leave empty — the impl rejects it */
         }
-        blocks.push({ type: "tool_use", id: c.id, name: c.function?.name, input });
+        blocks.push({ type: "tool_use", id: safeToolId(c.id), name: c.function?.name, input });
       }
       out.push({ role: "assistant", content: blocks });
       continue;
@@ -920,5 +927,6 @@ export async function agentChatStream(messages, tools, opts = {}, onDelta = () =
     }
   }
 
-  throw g?.failed || c?.failed || new Error("no answer came back");
+  /* the fallback's failure is the one that means there is genuinely no answer */
+  throw c?.failed || g?.failed || new Error("no answer came back");
 }
