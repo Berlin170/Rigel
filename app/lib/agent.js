@@ -445,7 +445,10 @@ export const AGENT_TOOLS = [
         "Read this wallet's token balances on another EVM chain. Call this when concentration looks extreme, when the wallet looks nearly empty here, or when the holdings suggest the owner is active elsewhere. Value held on other chains changes what the concentration number actually means.",
       parameters: {
         type: "object",
-        properties: { chain: { type: "string", enum: Object.keys(SCAN_CHAINS) } },
+        properties: {
+          chain: { type: "string", enum: Object.keys(SCAN_CHAINS) },
+          reason: { type: "string", description: "Brief public-facing purpose: the question this lookup will answer for the wallet." },
+        },
         required: ["chain"],
       },
     },
@@ -456,7 +459,9 @@ export const AGENT_TOOLS = [
       name: "check_approvals",
       description:
         "List outstanding token approvals and how much value each spender could still move today. Call this when the wallet holds material value. An unlimited approval left open to a stale contract is frequently a larger risk than the shape of the portfolio.",
-      parameters: { type: "object", properties: {} },
+      parameters: { type: "object", properties: {
+        reason: { type: "string", description: "Brief public-facing purpose: the question this lookup will answer for the wallet." },
+      } },
     },
   },
   {
@@ -468,6 +473,7 @@ export const AGENT_TOOLS = [
       parameters: {
         type: "object",
         properties: {
+          reason: { type: "string", description: "Brief public-facing purpose: the question this lookup will answer for the wallet." },
           symbol: {
             type: "string",
             description: "Ticker symbol, exactly as it appears in the holdings.",

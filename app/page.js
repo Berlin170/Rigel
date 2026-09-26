@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { readNdjson } from "./lib/ndjson.mjs";
+import Evidence from "./components/Evidence";
+import Investigation from "./components/Investigation";
 
 const CHAINS = [
   ["base-mainnet", "Base"],
@@ -209,67 +212,11 @@ function Constellation({ holdings, address }) {
   );
 }
 
-/* ================================================================== */
-/* THE CONSOLE                                                        */
-/*                                                                    */
-/* The agency used to be invisible until you committed to a 110-second */
-/* run: the page opened on a chart and the trace sat collapsed at the  */
-/* bottom. Now one surface carries all three states. Idle it replays a */
-/* real recorded run — jesse.base.eth, 85 down to 67 — typing itself   */
-/* out on a loop. Hit Diagnose and the same rows stream live from the  */
-/* server. Same grammar throughout, so the thing above the fold is     */
-/* visibly the same machine you are about to point at your own wallet. */
-/* The replay is labelled a replay: unlabelled it reads as live, and   */
-/* a visitor whose own run shows different numbers concludes it broke. */
-/* ================================================================== */
-
-const REPLAY = [
-  { tool: "resolve", detail: "jesse.base.eth → 0x8491…8bf1", ms: 210 },
-  { tool: "chain.portfolio", detail: "Base · 30-day daily holdings series", ms: 1840 },
-  { tool: "engine.score", detail: "9 checks · nothing alarming on one chain · health 85", ms: 12 },
-  { tool: "agent.decide", detail: "this wallet holds enough to be worth draining", ms: null },
-  { tool: "agent.tool", detail: "check_approvals() — 19 live · $1,293 reachable", ms: 890 },
-  { tool: "engine.revise", detail: "re-scored on what came back · health 67", ms: 8 },
-];
-
-/* the agent's own steps read amber, the engine's do not — a decision and a
-   computation should not look alike in a trace that is arguing for agency */
-const toolTone = (t = "") =>
-  t.startsWith("agent.") ? "is-agent" : t.startsWith("rigel.") ? "is-rigel" : "";
-
-/* The replay is driven from JS rather than staggered CSS delays so that the
-   rows build up, hold together, and clear together. On independent CSS cycles
-   only ever one or two are on screen at once and the console reads as empty —
-   the exact impression the strip exists to correct. */
-function useReplay(active) {
-  /* first render matches the server: the whole trace, so there is no layout
-     shift and no-JS still gets the content */
-  const [n, setN] = useState(REPLAY.length);
-
-  useEffect(() => {
-    if (!active) return;
-    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
-
-    let t;
-    let i = 0;
-    const tick = () => {
-      setN(i);
-      const atEnd = i >= REPLAY.length;
-      i = atEnd ? 0 : i + 1;
-      t = setTimeout(tick, atEnd ? 3400 : 560);
-    };
-    tick();
-    return () => clearTimeout(t);
-  }, [active]);
-
-  return n;
-}
-
 function ConsoleRow({ step, i, typed }) {
   return (
     <div className={"crow " + (typed ? "crow-type" : "crow-in")}>
       <span className="crow-n">{String(i + 1).padStart(2, "0")}</span>
-      <span className={"crow-tool " + toolTone(step.tool)}>{step.tool}</span>
+      <span className={"crow-tool " + (step.tool.startsWith("agent.") ? "is-agent" : "")}>{step.tool}</span>
       <span className="crow-detail">{step.detail}</span>
       <span className={"crow-ms" + (step.status === "fail" ? " is-fail" : "")}>
         {step.status === "fail" ? "failed" : step.ms ? step.ms + "ms" : "—"}
@@ -277,141 +224,6 @@ function ConsoleRow({ step, i, typed }) {
     </div>
   );
 }
-
-/* Decisions and tool calls are already in the trace; counting them here keeps
-   the report honest — the summary can only ever describe steps that ran. */
-function agentStats(steps = []) {
-  const decisions = steps.filter((s) => s.tool === "agent.decide").length;
-  const calls = steps
-    .filter((s) => s.tool === "agent.tool")
-    .map((s) => String(s.detail || "").split(" —")[0]);
-  return { decisions, calls };
-}
-
-function AgentConsole({ mode, steps, elapsed, data, target }) {
-  const replay = mode === "replay";
-  const shown = useReplay(replay);
-  const rows = replay ? REPLAY.slice(0, shown) : steps;
-  const { decisions, calls } = agentStats(mode === "done" ? data?.trace : []);
-  const bodyRef = useRef(null);
-
-  /* the replay clock adds up the real per-step timings as the rows land */
-  const replayMs = REPLAY.slice(0, shown).reduce((a, s) => a + (s.ms || 0), 0);
-
-  /* follow the newest row as it streams, the way a terminal does */
-  useEffect(() => {
-    if (replay) return;
-    const el = bodyRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [rows.length, replay]);
-
-  const moved =
-    mode === "done" &&
-    data?.baselineScore != null &&
-    data?.score != null &&
-    data.baselineScore !== data.score;
-
-  const status =
-    mode === "live" ? "running" : mode === "done" ? "complete" : "replay";
-
-  return (
-    <div className="console">
-      <div className="console-head">
-        <span className="console-lights" aria-hidden="true">
-          <i />
-          <i />
-          <i />
-        </span>
-        <span className="console-name">
-          rigel <b>{replay ? "jesse.base.eth" : target || "diagnose"}</b>
-        </span>
-        <span className={"pill " + (mode === "live" ? "is-running" : mode === "done" ? "is-done" : "")}>
-          <span className="pill-dot" />
-          {status}
-        </span>
-        <span style={{ flex: 1 }} />
-        <span className="console-clock">
-          {(replay ? replayMs / 1000 : elapsed / 1000).toFixed(1)}s
-        </span>
-      </div>
-
-      <div className="console-body" ref={bodyRef}>
-        {rows.map((s, i) => (
-          <ConsoleRow key={i} step={s} i={i} typed={replay} />
-        ))}
-
-        {mode === "live" && (
-          <div className="crow crow-working">
-            <span className="crow-n">{String(rows.length + 1).padStart(2, "0")}</span>
-            <span className="crow-tool is-agent">working</span>
-            <span className="crow-detail">
-              <span className="caret" />
-            </span>
-            <span className="crow-ms">⋯</span>
-          </div>
-        )}
-
-        {replay && (
-          <div className="crow">
-            <span className="crow-n" />
-            <span className="crow-tool">
-              <span className="caret" />
-            </span>
-            <span />
-            <span />
-          </div>
-        )}
-      </div>
-
-      {mode === "done" && calls.length > 0 && (
-        <div className="calls">
-          <span className="calls-label">
-            chose {calls.length} tool{calls.length === 1 ? "" : "s"} over {decisions}{" "}
-            decision{decisions === 1 ? "" : "s"}
-          </span>
-          {calls.map((c, i) => (
-            <span className="call" key={i} style={{ "--i": i }}>
-              {c}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {replay && (
-        <div className="console-foot">
-          <span className="delta">
-            health <span className="from">85</span>
-            <span className="arrow">→</span>
-            <span className="to">67</span>
-          </span>
-          <span className="console-caption">
-            the score moved because the agent went looking, not because a model said so
-          </span>
-          <span className="console-tag">recorded run · run your own below</span>
-        </div>
-      )}
-
-      {moved && (
-        <div className="console-foot">
-          <span className="delta">
-            health <span className="from">{data.baselineScore}</span>
-            <span className="arrow">→</span>
-            <span className={"to" + (data.score > data.baselineScore ? " up" : "")}>
-              {data.score}
-            </span>
-          </span>
-          <span className="console-caption">
-            {data.score < data.baselineScore
-              ? "on evidence the first pass never saw"
-              : "the first pass was reading one chain and got it wrong"}
-          </span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ---------------------------------------------------------------- */
 
 function ScoreGauge({ score, grade }) {
   const R = 54;
@@ -509,30 +321,13 @@ function Chat({ report }) {
         return;
       }
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          let msg;
-          try {
-            msg = JSON.parse(line);
-          } catch {
-            continue;
-          }
+      let completed = false;
+      await readNdjson(res.body, (msg) => {
           if (msg.t === "tool") {
             setTools((t) => [
               ...t,
               /* show whatever argument the tool got, not just `chain` */
-              `${msg.name}(${Object.values(msg.args || {})
+              `${msg.name}(${Object.entries(msg.args || {}).filter(([key]) => key !== "reason").map(([, value]) => value)
                 .filter((v) => typeof v === "string" && v.trim())
                 .join(", ")})`,
             ]);
@@ -547,14 +342,16 @@ function Chat({ report }) {
             setLive("");
             setThink("");
           } else if (msg.t === "reply") {
+            completed = true;
             setLive("");
             setThink("");
             setMessages((m) => [...m, { role: "assistant", content: msg.text }]);
           } else if (msg.t === "error") {
+            completed = true;
             setMessages((m) => [...m, { role: "assistant", content: msg.error }]);
           }
-        }
-      }
+      });
+      if (!completed) throw new Error("The chat stream ended before the reply.");
     } catch {
       setMessages((m) => [
         ...m,
@@ -657,7 +454,6 @@ export default function Page() {
   const [data, setData] = useState(null);
   const [live, setLive] = useState([]);
   const [elapsed, setElapsed] = useState(0);
-  const [showTrace, setShowTrace] = useState(false);
   const inputRef = useRef(null);
 
   /* A run takes upwards of a minute. A clock that is actually counting is the
@@ -683,7 +479,8 @@ export default function Page() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  async function run(addr) {
+  async function run(addr, selectedChain = chain) {
+    if (busy) return;
     const target = (addr ?? address).trim();
     if (!target) {
       setError("Paste a wallet address to run a diagnosis.");
@@ -698,7 +495,7 @@ export default function Page() {
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ address: target, chain }),
+        body: JSON.stringify({ address: target, chain: selectedChain }),
       });
 
       /* Validation and config failures still come back as plain JSON. */
@@ -709,32 +506,13 @@ export default function Page() {
         return;
       }
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        /* NDJSON: complete lines only — the tail may be a partial record. */
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          let msg;
-          try {
-            msg = JSON.parse(line);
-          } catch {
-            continue;
-          }
+      let completed = false;
+      await readNdjson(res.body, (msg) => {
           if (msg.t === "step") setLive((s) => [...s, msg.step]);
-          else if (msg.t === "done") setData(msg.payload);
-          else if (msg.t === "error") setError(msg.error);
-        }
-      }
+          else if (msg.t === "done") { completed = true; setData(msg.payload); }
+          else if (msg.t === "error") { completed = true; setError(msg.error); }
+      });
+      if (!completed) setError("The connection ended before the report was ready. Run the diagnosis again.");
     } catch {
       setError("The request did not complete. Check your connection and run it again.");
     } finally {
@@ -745,10 +523,10 @@ export default function Page() {
   function sample(a) {
     setAddress(a);
     setChain("base-mainnet");
-    run(a);
+    run(a, "base-mainnet");
   }
 
-  const mode = busy ? "live" : data ? "done" : "replay";
+  const mode = busy ? "live" : data ? "done" : error && live.length ? "error" : "replay";
   const status = busy ? "running" : error ? "error" : data ? "complete" : "idle";
 
   return (
@@ -785,15 +563,15 @@ export default function Page() {
       </header>
 
       <div className="shell">
-        <section className="hero">
+        <section className={"hero" + (busy || data ? " hero-compact" : "")}>
+          <span className="eyebrow">Autonomous wallet investigation</span>
           <h1>
-            It decides what to check. <em>Then it goes and looks.</em>
+            Your wallet has a story.<br /><em>Rigel follows the evidence.</em>
           </h1>
           <p>
-            Nine deterministic checks run on any wallet. Then an agent reads that
-            output, picks what the first pass missed — other chains, open approvals
-            — and investigates. Everything it brings back is re-scored by the same
-            engine, so <b>the health score moves on evidence</b>.
+            Start with an address. Rigel scans the portfolio, chooses what needs a
+            closer look, and investigates. See what it checks, why it checks it,
+            and <b>what the evidence changes</b>.
           </p>
 
           <div className="hero-facts">
@@ -807,18 +585,10 @@ export default function Page() {
             </div>
             <div className="hero-fact">
               <div className="n">0</div>
-              <div className="l">numbers written by the model</div>
+              <div className="l">scores assigned by the model</div>
             </div>
           </div>
         </section>
-
-        <AgentConsole
-          mode={mode}
-          steps={mode === "live" ? live : data?.trace || []}
-          elapsed={elapsed}
-          data={data}
-          target={data?.address ? data.address.slice(0, 10) + "…" : address.slice(0, 10)}
-        />
 
         <div className="cmd">
           <label className="field">
@@ -828,13 +598,14 @@ export default function Page() {
               value={address}
               onChange={(e) => setAddress(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && !busy && run()}
-              placeholder="0x… wallet address or ENS name"
+              placeholder="0x… EVM wallet address"
               spellCheck="false"
               aria-label="Wallet address"
+              disabled={busy}
             />
             <span className="kbd hide-sm">⌘K</span>
           </label>
-          <select value={chain} onChange={(e) => setChain(e.target.value)} aria-label="Chain">
+          <select value={chain} onChange={(e) => setChain(e.target.value)} aria-label="Chain" disabled={busy}>
             {CHAINS.map(([v, l]) => (
               <option key={v} value={v}>
                 {l}
@@ -843,7 +614,7 @@ export default function Page() {
           </select>
           <button className="run" onClick={() => run()} disabled={busy}>
             {busy && <span className="spin" />}
-            {busy ? "Reading" : "Diagnose"}
+            {busy ? "Investigating" : "Investigate wallet"}
           </button>
         </div>
 
@@ -867,7 +638,21 @@ export default function Page() {
           </button>
         </div>
 
-        {error && <div className="notice bad">{error}</div>}
+        <p className="scan-hint">Read-only · no wallet connection or signature. Allow a few minutes for a live investigation; sample results change with onchain activity.</p>
+
+        {error && <div className="notice bad" role="alert">{error}</div>}
+
+        <Investigation
+          mode={mode}
+          steps={mode === "live" || mode === "error" ? live : data?.trace || []}
+          elapsed={elapsed}
+          data={data}
+          target={data?.address || address}
+        >
+          <div className="console-body is-full">
+            {(data?.trace || live).map((step, i) => <ConsoleRow key={i} step={step} i={i} />)}
+          </div>
+        </Investigation>
 
         {!data && !busy && (
           <>
@@ -887,16 +672,9 @@ export default function Page() {
             </div>
             <p className="preview-foot">
               Every one of these is computed by a deterministic engine. The model
-              chooses where to look next and writes the diagnosis — it never
-              produces a number.
+              chooses where to look next and writes the diagnosis. Scores and
+              evidence figures come from the engine.
             </p>
-          </>
-        )}
-
-        {busy && (
-          <>
-            <div className="skeleton sk-chart" />
-            <div className="skeleton sk-verdict" />
           </>
         )}
 
@@ -947,6 +725,27 @@ export default function Page() {
             </div>
 
             <div className="sec">
+              <h2>Findings</h2>
+              <span className="line" />
+              <span className="sec-note">{data.findings.length} raised</span>
+            </div>
+            <div>
+              {data.findings.map((f) => (
+                <div key={f.id} className={"finding " + f.severity}>
+                  <span className="finding-source">{data.investigationFindings?.some((extra) => extra.id === f.id) ? "Added by follow-up investigation" : "Initial scan"}</span>
+                  <div className="finding-head">
+                    <h3>{f.title}</h3>
+                    <span className={"badge " + f.severity}>{f.severity}</span>
+                  </div>
+                  <p>{f.detail}</p>
+                  {f.evidence && <div className="evidence">{f.evidence}</div>}
+                </div>
+              ))}
+            </div>
+
+            <Evidence report={data} />
+
+            <div className="sec">
               <h2>The chart</h2>
               <span className="line" />
               <span className="sec-note">size = share of value</span>
@@ -968,8 +767,8 @@ export default function Page() {
                     <p key={i}>{p}</p>
                   ))}
                   <div className="byline">
-                    Written from the engine output above. No figure in this text was
-                    produced by the model.
+                    AI-written from engine facts. Verify numerical claims against
+                    the findings and downloadable evidence.
                   </div>
                 </div>
               </>
@@ -995,24 +794,6 @@ export default function Page() {
               <span className="sec-note">decentralized inference</span>
             </div>
             <Chat key={data.address + data.chain} report={data} />
-
-            <div className="sec">
-              <h2>Findings</h2>
-              <span className="line" />
-              <span className="sec-note">{data.findings.length} raised</span>
-            </div>
-            <div>
-              {data.findings.map((f) => (
-                <div key={f.id} className={"finding " + f.severity}>
-                  <div className="finding-head">
-                    <h3>{f.title}</h3>
-                    <span className={"badge " + f.severity}>{f.severity}</span>
-                  </div>
-                  <p>{f.detail}</p>
-                  {f.evidence && <div className="evidence">{f.evidence}</div>}
-                </div>
-              ))}
-            </div>
 
             {data.holdings.length > 0 && (
               <>
@@ -1090,22 +871,6 @@ export default function Page() {
               </>
             )}
 
-            <div className="sec">
-              <h2>Full trace</h2>
-              <span className="line" />
-              <button className="ghost" onClick={() => setShowTrace((v) => !v)}>
-                {showTrace ? "Hide" : `Show ${data.trace.length} steps`}
-              </button>
-            </div>
-            {showTrace && (
-              <div className="console">
-                <div className="console-body is-full">
-                  {data.trace.map((s, i) => (
-                    <ConsoleRow key={i} step={s} i={i} />
-                  ))}
-                </div>
-              </div>
-            )}
           </>
         )}
 

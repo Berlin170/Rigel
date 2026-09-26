@@ -18,7 +18,7 @@ On `vitalik.eth`, which reads as heavily concentrated on Base, it chose to pull 
 
 That run took the health score from **46 to 68**. The score went *up*, and not because the model decided so: the Ethereum scan showed the wallet's real size, the engine refunded a concentration penalty it could no longer justify, and the approvals came back with little behind them. An investigation that can clear a wallet is the same mechanism as one that can condemn it — `jesse.base.eth` runs the identical loop and comes out at 85 → 67.
 
-The trace at the bottom of every report shows each decision as it happens, streamed live while the agent works.
+The investigation view shows the initial evidence, the agent's selected checks, and what changed. Each live tool card displays its public-facing purpose and its result or unresolved status. Expand **Technical trace** for the streamed events behind the cards.
 
 ---
 
@@ -117,6 +117,18 @@ Ask follow-up questions about a report. The same tools are available, under the 
 ---
 
 ## Running locally
+
+### Reviewable evidence
+
+The interface follows five stages: **Scan → Identify gaps → Investigate → Verify → Report**. Stages advance from server events, not a simulated timer. Tool starts and completions share a call ID, so concurrent results update the correct card. A model-supplied explanation is labeled **Agent’s stated purpose**; when absent, the UI uses a factual **Check purpose** instead. The initial landing-page case study is explicitly marked as a recorded example. An unchanged score still shows the additional findings and unresolved lookups.
+
+The visible activity console restores the animated terminal experience: recorded events type in on the landing page, and actual server events stream in during a scan. Example stages, cards, and the score reveal follow that replay. Playback can be paused, stops advancing in hidden tabs, and displays the full example without autoplay when reduced motion is requested. Full raw events remain available in **Technical trace**.
+
+Completed reports include a **Verify this diagnosis** panel with the balance provider, history coverage, failed lookups, and generation time. Expand the score breakdown to see each penalty and refund. **Download report** saves a Markdown report; **Evidence JSON** saves the structured report and full trace. Exports are generated locally in the browser.
+
+Failed scans retain their actual trace instead of returning to the historical replay. Interrupted report and chat streams display a retry error. The address field accepts EVM hex addresses; the named sample buttons supply their corresponding addresses on Base.
+
+Run `npm test` for stream parsing and evidence-export regression checks. See [HACKATHON.md](HACKATHON.md) for the submission pitch, recording script, and limitations.
 
 ```bash
 npm install

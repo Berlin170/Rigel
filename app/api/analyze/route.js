@@ -17,6 +17,7 @@ import {
   stripThink,
   usd,
 } from "../../lib/agent";
+import { toolOutcome } from "../../lib/investigation.mjs";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -42,11 +43,14 @@ function makeTrace(emit) {
 
   return {
     steps,
-    async run(tool, detail, fn) {
+    async run(tool, detail, fn, meta = {}) {
       const t0 = Date.now();
       try {
         const out = await fn();
-        push({ tool, detail, ms: Date.now() - t0, status: "ok" });
+        if (out?.error) throw new Error(out.error);
+        push({ tool, detail, ms: Date.now() - t0, status: "ok", ...meta,
+          ...(tool === "agent.tool" && out ? { outcome: toolOutcome(meta.name, out) } : {}),
+        });
         return out;
       } catch (err) {
         push({
@@ -54,12 +58,13 @@ function makeTrace(emit) {
           detail: detail + " — " + (err?.message || "failed"),
           ms: Date.now() - t0,
           status: "fail",
+          ...meta,
         });
         return null;
       }
     },
-    note(tool, detail) {
-      push({ tool, detail, ms: 0, status: "ok" });
+    note(tool, detail, meta = {}) {
+      push({ tool, detail, ms: 0, status: "ok", ...meta });
     },
   };
 }
@@ -648,6 +653,7 @@ async function investigate(ctx) {
           "This wallet is below the value floor, so the engine refused to score it. The only question worth answering is whether the address is unused or simply active somewhere else. Nothing here is worth taking, so exposure is not the question.",
         ]),
     "You may call several tools at once. Stop when further lookups would not change the diagnosis — but stop by saying so, not by describing a check you did not run. Nothing is checked unless you call the tool.",
+    "For each tool call, include a brief user-facing reason describing the question that lookup will answer for this wallet. Use one plain sentence, no internal deliberation, no numerical estimates, and no claim that the lookup has already succeeded.",
     "When you are done, reply with one short plain sentence naming what you checked and why. No numbers, no markdown, no headings or bullets — the engine writes the report, not you.",
   ].join("\n");
 
@@ -765,14 +771,20 @@ async function investigate(ctx) {
         }
         /* label from whatever the tool was actually given — hardcoding `chain`
            left every inspect_token call reading as a bare `inspect_token()` */
-        const shown = Object.values(args || {})
+        const shown = Object.entries(args || {}).filter(([key]) => key !== "reason").map(([, value]) => value)
           .filter((v) => typeof v === "string" && v.trim())
           .join(", ");
         const label = `${name}(${shown})`;
+        const meta = {
+          callId: call.id || `step-${step}-${calls.indexOf(call)}`,
+          name,
+          subject: shown,
+          reason: typeof args.reason === "string" ? clip(oneLine(args.reason), 240) : null,
+        };
+        trace.note("agent.tool.start", label, meta);
 
-        const out = await trace.run("agent.tool", `${label} — the agent chose this`, () =>
-          TOOL_IMPL[name] ? TOOL_IMPL[name](args, ctx) : Promise.resolve({ error: "no such tool" })
-        );
+        const out = await trace.run("agent.tool", label, () =>
+          TOOL_IMPL[name] ? TOOL_IMPL[name](args, ctx) : Promise.resolve({ error: "no such tool" }), meta);
 
         messages.push({
           role: "tool",
@@ -1015,7 +1027,8 @@ async function analyze({ address, chain, chainLabel, key, trace, send }) {
   }
   trace.note(
     "engine.diagnose",
-    `${report.findings.length} findings · health ${report.score ?? "n/a"}/100`
+    `${report.findings.length} findings · health ${report.score ?? "n/a"}/100`,
+    { baseline: { score: report.score, findings: report.findings.length, chainLabel } }
   );
 
   /* the agent decides what else is worth looking at; anything it turns up
@@ -1047,6 +1060,7 @@ async function analyze({ address, chain, chainLabel, key, trace, send }) {
      and the final score is the only honest measure of what the agent added */
   const baselineScore = report.score;
   const baselineFindings = report.findings.length;
+  const baselineEvidence = { score: report.score, findings: baselineFindings, chainLabel };
 
   const extra = report.investigable ? await investigate(ctx) : [];
 
@@ -1063,6 +1077,7 @@ async function analyze({ address, chain, chainLabel, key, trace, send }) {
     extra.push(...crossChainFindings(report, ctx.scans));
   }
 
+  trace.note("engine.verify", "checking the findings against the scoring rules");
   if (extra.length) {
     report.findings.push(...extra);
 
@@ -1119,6 +1134,7 @@ async function analyze({ address, chain, chainLabel, key, trace, send }) {
      and `briefReason` empty — the UI would then render neither the diagnosis
      nor a notice, so an outage looks like a missing feature. Give the failure
      a reason of its own. */
+  trace.note("report.start", "preparing the report from verified engine findings");
   const brief =
     (await trace.run("rigel.brief", "writing the diagnosis from engine facts", () =>
       writeBrief(factsForModel)
@@ -1128,6 +1144,12 @@ async function analyze({ address, chain, chainLabel, key, trace, send }) {
     t: "done",
     payload: {
       ok: true,
+      generatedAt: new Date().toISOString(),
+      coverage: {
+        balanceProvider: balanceRead.provider,
+        seriesPoints: series.length,
+        lastTransaction: lastTx,
+      },
       address,
       chain,
       chainLabel,
@@ -1135,6 +1157,8 @@ async function analyze({ address, chain, chainLabel, key, trace, send }) {
       score: report.score,
       baselineScore,
       baselineFindings,
+      baselineEvidence,
+      investigationFindings: extra,
       grade: report.grade,
       findings: report.findings,
       metrics: report.metrics,
