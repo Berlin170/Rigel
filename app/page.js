@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { readNdjson } from "./lib/ndjson.mjs";
 import Evidence from "./components/Evidence";
+import { hasPartialCoverage } from "./lib/scope.mjs";
 import Investigation from "./components/Investigation";
 
 const CHAINS = [
@@ -527,7 +528,7 @@ export default function Page() {
   }
 
   const mode = busy ? "live" : data ? "done" : error && live.length ? "error" : "replay";
-  const status = busy ? "running" : error ? "error" : data ? "complete" : "idle";
+  const status = busy ? "running" : error ? "error" : data ? hasPartialCoverage(data) ? "partial" : "complete" : "idle";
 
   return (
     <>
@@ -546,7 +547,7 @@ export default function Page() {
 
           <span className={"pill is-" + status}>
             <span className="pill-dot" />
-            agent {status}
+            {status === "partial" ? "report ready · partial coverage" : `agent ${status}`}
           </span>
 
           <span className="topbar-spacer" />
@@ -683,7 +684,7 @@ export default function Page() {
             <div className="sec">
               <h2>Verdict</h2>
               <span className="line" />
-              <span className="sec-note">{chainLabel(data.chain || chain)}</span>
+              <span className="sec-note">{chainLabel(data.chain || chain)} score + follow-up evidence</span>
             </div>
             <div className="verdict">
               <ScoreGauge score={data.score} grade={data.grade} />
@@ -698,19 +699,19 @@ export default function Page() {
                   )}
                 </div>
                 <div className="stat">
-                  <div className="k">Positions</div>
+                  <div className="k">{data.chainLabel} positions</div>
                   <div className="v">{data.metrics?.positions ?? 0}</div>
                 </div>
                 <div className="stat">
-                  <div className="k">Top weight</div>
+                  <div className="k">{data.chainLabel} top weight</div>
                   <div className="v">{pct(data.metrics?.topShare)}</div>
                 </div>
                 <div className="stat">
-                  <div className="k">In stables</div>
+                  <div className="k">{data.chainLabel} stables</div>
                   <div className="v">{pct(data.metrics?.stableShare)}</div>
                 </div>
                 <div className="stat">
-                  <div className="k">30d change</div>
+                  <div className="k">{data.chainLabel} 30d change</div>
                   <div className="v">
                     {data.metrics?.change == null
                       ? "—"
@@ -718,7 +719,7 @@ export default function Page() {
                   </div>
                 </div>
                 <div className="stat">
-                  <div className="k">Off peak</div>
+                  <div className="k">{data.chainLabel} off peak</div>
                   <div className="v">{pct(data.metrics?.drawdown)}</div>
                 </div>
               </div>
@@ -729,10 +730,11 @@ export default function Page() {
               <span className="line" />
               <span className="sec-note">{data.findings.length} raised</span>
             </div>
+            <p className="notice">{data.scope?.scoreScope || `Metrics and holdings describe ${data.chainLabel}.`}{data.scope?.combinedValueUsd > data.scope?.startingChainValueUsd && ` The ${data.chainLabel} ${data.scope.startingPositionSymbol} position represents ${pct(data.scope.startingPositionShareOfObservedValue)} of observed value across scanned chains. This is not its consolidated exposure across chains.`}</p>
             <div>
               {data.findings.map((f) => (
                 <div key={f.id} className={"finding " + f.severity}>
-                  <span className="finding-source">{data.investigationFindings?.some((extra) => extra.id === f.id) ? "Added by follow-up investigation" : "Initial scan"}</span>
+                  <span className="finding-source">{data.investigationFindings?.some((extra) => extra.id === f.id) ? "Added by follow-up investigation" : "Initial scan"} · {f.scope || data.chainLabel}</span>
                   <div className="finding-head">
                     <h3>{f.title}</h3>
                     <span className={"badge " + f.severity}>{f.severity}</span>
@@ -746,7 +748,7 @@ export default function Page() {
             <Evidence report={data} />
 
             <div className="sec">
-              <h2>The chart</h2>
+              <h2>{data.chainLabel} holdings chart</h2>
               <span className="line" />
               <span className="sec-note">size = share of value</span>
             </div>

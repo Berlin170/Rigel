@@ -18,6 +18,7 @@ import {
   usd,
 } from "../../lib/agent";
 import { toolOutcome } from "../../lib/investigation.mjs";
+import { applyFindingScope, modelReportFacts, SCOPE_RULES } from "../../lib/scope.mjs";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -508,22 +509,9 @@ function crossChainFindings(report, scans) {
       severity: refund > 0 ? "ok" : "note",
       title:
         refund > 0
-          ? "The concentration reading was too harsh"
+          ? "Cross-chain evidence adjusts the concentration penalty"
           : "More of this wallet sits on other chains",
-      detail:
-        refund > 0
-          ? `Counting only ${report.chainLabel} made ${report.metrics.topSymbol} look like ${pct(
-              report.metrics.topShare
-            )} of everything. Across the chains checked, the wallet is worth ${usd(
-              combined
-            )} and ${report.metrics.topSymbol} is ${pct(
-              trueTop
-            )} of it. The single-chain view was the problem, not the portfolio.`
-          : `Another ${usd(elsewhere)} sits outside ${report.chainLabel}, bringing the wallet to ${usd(
-              combined
-            )}. ${report.metrics.topSymbol} is ${pct(
-              trueTop
-            )} of the combined total rather than ${pct(report.metrics.topShare)}.`,
+      detail: `Observed value across the scanned chains is ${usd(combined)}, including ${usd(elsewhere)} outside ${report.chainLabel}. The ${report.chainLabel} ${report.metrics.topSymbol} position is ${pct(report.metrics.topShare)} of that chain's priced holdings and ${pct(trueTop)} of the observed cross-chain total. This is not consolidated exposure to ${report.metrics.topSymbol} across chains. ${refund > 0 ? `The heuristic refunds ${refund} concentration penalty points; this does not establish whole-wallet diversification.` : "The concentration penalty is unchanged."}`,
       evidence: where,
       penalty: -refund,
     },
@@ -817,6 +805,7 @@ async function writeBrief(facts) {
     "You are Rigel, a wallet diagnostics analyst.",
     "You are given the complete output of a deterministic risk engine. Write a short diagnosis for the wallet's owner.",
     "Rules, without exception:",
+    SCOPE_RULES,
     "- Use only numbers that appear in the supplied facts. Never estimate, extrapolate, or invent a figure.",
     "- Do not predict prices or tell anyone to buy or sell a specific token.",
     "- Lead with the single thing that matters most. Do not restate every finding.",
@@ -1112,23 +1101,8 @@ async function analyze({ address, chain, chainLabel, key, trace, send }) {
     );
   }
 
-  const factsForModel = {
-    chain: chainLabel,
-    totalValueUsd: Math.round(report.total),
-    healthScore: report.score,
-    grade: report.grade,
-    metrics: report.metrics,
-    findings: report.findings.map((f) => ({
-      severity: f.severity,
-      title: f.title,
-      evidence: f.evidence,
-    })),
-    topHoldings: buckets.priced.slice(0, 8).map((p) => ({
-      symbol: p.symbol,
-      valueUsd: Math.round(p.value),
-      share: report.total ? +(p.value / report.total).toFixed(4) : 0,
-    })),
-  };
+  const scope = applyFindingScope(report);
+  const factsForModel = modelReportFacts({ ...report, baselineScore, holdings: buckets.priced, trace: trace.steps });
 
   /* trace.run swallows throws and returns null, which would leave both `brief`
      and `briefReason` empty — the UI would then render neither the diagnosis
@@ -1158,6 +1132,7 @@ async function analyze({ address, chain, chainLabel, key, trace, send }) {
       baselineScore,
       baselineFindings,
       baselineEvidence,
+      scope,
       investigationFindings: extra,
       grade: report.grade,
       findings: report.findings,

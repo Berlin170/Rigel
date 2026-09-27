@@ -120,6 +120,8 @@ Ask follow-up questions about a report. The same tools are available, under the 
 
 ### Reviewable evidence
 
+Metrics, charts, and findings name their chain scope. Cross-chain totals are separate from the starting-chain percentages. A concentration refund updates the diagnostic heuristic without claiming a fully consolidated portfolio assessment. Diagnosis and chat receive the same scoped engine facts, including the adjustment and failed lookups. Reports with failed checks are labeled **Report ready · partial coverage**.
+
 The interface follows five stages: **Scan → Identify gaps → Investigate → Verify → Report**. Stages advance from server events, not a simulated timer. Tool starts and completions share a call ID, so concurrent results update the correct card. A model-supplied explanation is labeled **Agent’s stated purpose**; when absent, the UI uses a factual **Check purpose** instead. The initial landing-page case study is explicitly marked as a recorded example. An unchanged score still shows the additional findings and unresolved lookups.
 
 The visible activity console restores the animated terminal experience: recorded events type in on the landing page, and actual server events stream in during a scan. Example stages, cards, and the score reveal follow that replay. Playback can be paused, stops advancing in hidden tabs, and displays the full example without autoplay when reduced motion is requested. Full raw events remain available in **Technical trace**.

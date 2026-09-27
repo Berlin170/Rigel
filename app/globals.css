@@ -220,6 +220,8 @@ a {
   background: var(--ok);
 }
 
+.pill.is-partial { border-color: var(--border-accent); color: var(--accent); background: var(--accent-soft); white-space: normal; height: auto; min-height: 26px; padding-block: 5px; }
+.pill.is-partial .pill-dot { background: var(--accent); }
 .pill.is-error {
   border-color: rgba(240, 102, 106, 0.3);
   background: var(--bad-soft);

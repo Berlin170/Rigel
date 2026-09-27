@@ -8,6 +8,8 @@ import {
   CHAINS,
 } from "../../lib/agent";
 
+import { modelReportFacts, SCOPE_RULES } from "../../lib/scope.mjs";
+
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
@@ -24,6 +26,7 @@ const SYSTEM = [
   "You are Rigel, a wallet diagnostics analyst, answering follow-up questions about a report the engine has already produced.",
   "",
   "Rules, without exception:",
+  SCOPE_RULES,
   "- Use only numbers that appear in the report below or in a tool result. Never estimate, extrapolate, or invent a figure.",
   "- If the answer needs data you do not have, call a tool to get it. Do not guess.",
   "- If a tool cannot answer it, say plainly that you do not have that data.",
@@ -101,30 +104,7 @@ export async function POST(req) {
     return Response.json({ ok: false, error: "Nothing to answer." }, { status: 400 });
   }
 
-  const facts = {
-    chain: report.chainLabel,
-    address,
-    totalValueUsd: Math.round(report.total || 0),
-    combinedValueUsd: report.metrics?.combinedTotal
-      ? Math.round(report.metrics.combinedTotal)
-      : undefined,
-    chainsScanned: report.metrics?.chainsScanned,
-    healthScore: report.score,
-    grade: report.grade,
-    metrics: report.metrics,
-    /* titles and evidence only — the full prose roughly triples the prompt and
-       Kimi's reasoning time scales with it */
-    findings: (report.findings || []).map((f) => ({
-      severity: f.severity,
-      title: f.title,
-      evidence: f.evidence,
-    })),
-    topHoldings: (report.holdings || []).slice(0, 10).map((h) => ({
-      symbol: h.symbol,
-      valueUsd: Math.round(h.value),
-      share: +(h.share || 0).toFixed(4),
-    })),
-  };
+  const facts = { address, ...modelReportFacts(report) };
 
   const messages = [
     { role: "system", content: SYSTEM },

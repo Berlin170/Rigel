@@ -9,6 +9,8 @@ export function reportMarkdown(report) {
     `Wallet: ${report.address}`, `Starting chain: ${report.chainLabel}`,
     `Generated: ${report.generatedAt || "Not recorded"}`,
     `Balance provider: ${report.coverage?.balanceProvider || "Not recorded"}`, "",
+    `Scope: ${report.scope?.scoreScope || `${report.chainLabel} holdings and metrics; additional-chain totals are separate evidence.`}`,
+    `Coverage: ${(report.trace || []).some((s) => s.status === "fail") ? "Partial — unresolved failed checks" : "No failed checks recorded"}`, "",
     `Baseline: ${score(report.baselineScore)}`, `Final: ${score(report.score)} (${report.grade})`, "",
     "## Score breakdown", "",
     ...(report.score == null ? ["Score withheld; findings below are not a grade."] : [
@@ -19,7 +21,7 @@ export function reportMarkdown(report) {
     `Latest transaction observed: ${report.coverage?.lastTransaction || "Unavailable"}`,
     "A missing lookup is unknown, not evidence of safety. Holdings and shape metrics describe the starting chain; additional chain totals do not constitute a full multichain portfolio audit.",
     "", "## Findings", "",
-    ...(report.findings || []).flatMap((f) => [`### ${f.title}`, f.detail, `Evidence: ${f.evidence || "None supplied"}`, ""]),
+    ...(report.findings || []).flatMap((f) => [`### ${f.title}`, `Scope: ${f.scope || report.chainLabel}`, f.detail, `Evidence: ${f.evidence || "None supplied"}`, ""]),
     "## Investigation trace", "",
     ...(report.trace || []).map((s) => `- [${s.status || "ok"}] ${s.tool}: ${s.detail} (${s.ms ?? 0} ms)${s.reason ? `\n  Stated purpose: ${s.reason}` : ""}${s.outcome ? `\n  Result: ${s.outcome}` : ""}`), "",
     "Snapshot of provider responses at scan time. Prices, holdings, and allowances can change. The score is a heuristic, not a security audit or investment recommendation.", "",

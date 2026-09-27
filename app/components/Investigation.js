@@ -13,6 +13,7 @@ export default function Investigation({ mode, steps, elapsed, data, target, chil
   const baseline = data?.baselineEvidence || rows.find((s) => s.baseline)?.baseline;
   const failures = rows.filter((s) => s.status === "fail");
   const done = mode === "done";
+  const partial = done && failures.length > 0;
   const stopped = mode === "error";
   const stage = activeStage(rows, mode);
   const additions = data?.investigationFindings || [];
@@ -30,8 +31,8 @@ export default function Investigation({ mode, steps, elapsed, data, target, chil
           <h2 aria-live="polite">{example ? "A healthy-looking wallet. An overlooked permission." : done ? "Here’s what the investigation found." : stopped ? "This investigation could not finish." : liveTitle}</h2>
           <p>{example ? "jesse.base.eth · recorded example, not live data" : `${target || "Wallet"} · ${done ? "report ready" : stopped ? "review the trace and try again" : "read-only investigation"}`}</p>
         </div>
-        <span className={"pill " + (done ? "is-done" : stopped ? "is-error" : example ? "" : "is-running")}>
-          <span className="pill-dot" />{example ? "Recorded example" : done ? "Complete" : stopped ? "Stopped" : `${Math.floor(elapsed / 1000)}s · live`}
+        <span className={"pill " + (partial ? "is-partial" : done ? "is-done" : stopped ? "is-error" : example ? "" : "is-running")}>
+          <span className="pill-dot" />{example ? "Recorded example" : partial ? "Report ready · partial coverage" : done ? "Report ready" : stopped ? "Stopped" : `${Math.floor(elapsed / 1000)}s · live`}
         </span>
       </div>
 
